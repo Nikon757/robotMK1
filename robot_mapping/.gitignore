@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+maps/
+models/*.hef
+config/oak_calib.json

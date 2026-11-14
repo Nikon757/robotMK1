@@ -1,0 +1,25 @@
+# Keil MDK build output and per-user IDE state
+firmware/Objects/
+firmware/Listings/
+firmware/*.uvguix.*
+firmware/**/*.bak
+firmware/JLinkLog.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data produced on the robot: maps, recordings, model files
+robot_mapping/maps/
+robot_mapping/models/*.hef
+robot_mapping/config/oak_calib.json
+*.mcap
+*.db3
+rosbag2_*/
+
+# Editors and OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

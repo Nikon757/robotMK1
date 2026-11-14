@@ -1,0 +1,10 @@
+# RobotMK1 mapping - Python dependencies (Raspberry Pi OS Trixie, Python 3.13, aarch64)
+# Install into a venv created with --system-site-packages (see install.sh) so that the apt
+# hailort bindings ("hailo_platform") remain importable.
+numpy>=1.26,<3
+scipy>=1.11
+opencv-python>=4.10,<5          # GUI build (cv2.imshow for --viz); opencv-python-headless on a headless Pi
+depthai>=2.30,<3                # DepthAI v2 API for the OAK-D Lite (cp313 aarch64 wheels exist)
+pyserial>=3.5                   # LiDAR + STM32 serial links
+PyYAML>=6.0
+matplotlib>=3.7                 # lidar-view, preview.png

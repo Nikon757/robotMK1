@@ -1,0 +1,13 @@
+# RobotMK1 USB device rules  ->  /etc/udev/rules.d/99-robot-usb.rules
+# Reload with:  sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Check the real IDs with `lsusb` if a symlink does not appear.
+
+# LDROBOT LiDAR USB adapter (D800 kit ships a Silicon Labs CP210x bridge)  ->  /dev/robot_lidar
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="robot_lidar", MODE="0666"
+
+# Niumo V5 / YourFun main board, CH340 USB-UART bridge  ->  /dev/robot_mcu
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="robot_mcu", MODE="0666"
+
+# Luxonis OAK cameras (Intel Movidius VID 03e7): allow access without root, both before and after firmware boot
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"

@@ -1,0 +1,8 @@
+# Files that run on the Raspberry Pi keep Linux line endings (LF), also in a Windows
+# checkout, so a script copied from the PC with scp still runs on the Pi.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.rules     text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+Dockerfile  text eol=lf

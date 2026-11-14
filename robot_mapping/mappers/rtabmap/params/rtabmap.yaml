@@ -1,0 +1,56 @@
+# RTAB-Map core parameters for RobotMK1 (RGB-D + forward-180deg 2-D LiDAR + IMU).
+# All RTAB-Map "Param/Name" values must be strings.  Full list:  rtabmap --params
+# The launch file overrides Reg/Force3DoF and the IMU-related entries from robot.yaml / CLI flags.
+/**:
+  ros__parameters:
+    # ---- memory / rate
+    Rtabmap/DetectionRate: "1.0"          # graph update rate (Hz); odometry still runs at camera rate
+    Mem/STMSize: "30"
+    Mem/NotLinkedNodesKept: "false"
+    Mem/IncrementalMemory: "true"         # mapping (false = localisation only)
+    Mem/InitWMWithAllNodes: "false"
+    # ---- registration: visual + ICP refinement with the LiDAR scan
+    Reg/Strategy: "1"                     # 0 vis, 1 icp, 2 vis+icp   (loop closures are found visually, refined with ICP)
+    Reg/Force3DoF: "true"                 # ground robot: x, y, yaw only
+    RGBD/NeighborLinkRefining: "true"     # refine odometry links with the scan
+    RGBD/ProximityBySpace: "true"
+    RGBD/ProximityPathMaxNeighbors: "10"
+    RGBD/AngularUpdate: "0.05"
+    RGBD/LinearUpdate: "0.05"
+    RGBD/OptimizeFromGraphEnd: "false"
+    RGBD/LocalRadius: "5"
+    Icp/VoxelSize: "0.05"
+    Icp/MaxCorrespondenceDistance: "0.15"
+    Icp/PointToPlane: "false"
+    Icp/CorrespondenceRatio: "0.2"
+    Icp/Epsilon: "0.001"
+    Icp/MaxTranslation: "0.5"
+    Icp/MaxRotation: "0.5"
+    # ---- visual features
+    Kp/MaxFeatures: "400"
+    Kp/DetectorStrategy: "8"              # GFTT/ORB
+    Vis/MinInliers: "15"
+    Vis/MaxFeatures: "600"
+    Vis/EstimationType: "1"               # PnP
+    # ---- occupancy grid (used for /rtabmap/map, Nav2)
+    Grid/Sensor: "2"                      # 0 laser only, 1 camera only, 2 both
+    Grid/RangeMax: "10.0"
+    Grid/CellSize: "0.05"
+    Grid/RayTracing: "true"
+    Grid/3D: "false"
+    Grid/MaxGroundHeight: "0.05"
+    Grid/MaxObstacleHeight: "0.60"
+    Grid/NormalsSegmentation: "false"
+    Grid/FootprintLength: "0.30"
+    Grid/FootprintWidth: "0.25"
+    Grid/FootprintHeight: "0.30"
+    # ---- optimiser
+    Optimizer/Strategy: "1"               # g2o
+    Optimizer/Robust: "true"
+    Optimizer/GravitySigma: "0.0"         # >0 (e.g. 0.3) only after camera.imu_verified = true
+    # ---- odometry (rgbd_odometry / icp_odometry read the same names)
+    Odom/Strategy: "0"                    # frame-to-map
+    Odom/ResetCountdown: "1"              # auto-reset odometry after 1 lost frame instead of stopping
+    Odom/GuessMotion: "true"
+    Odom/Holonomic: "false"
+    OdomF2M/MaxSize: "1500"
