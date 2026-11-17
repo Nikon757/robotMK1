@@ -11,7 +11,9 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repository root, for "modules"
+# The repository root, for "modules". Appended, not prepended: installed libraries must win
+# over project folders with the same name (the project has a depthai/ folder).
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from modules.engines import Robot
 from modules.script_tools import confirm_start, run

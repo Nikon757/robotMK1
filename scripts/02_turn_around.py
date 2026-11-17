@@ -14,7 +14,9 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repository root, for "modules"
+# The repository root, for "modules". Appended, not prepended: installed libraries must win
+# over project folders with the same name (the project has a depthai/ folder).
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from modules.engines import Robot
 from modules.script_tools import confirm_start, run
@@ -32,8 +34,12 @@ def main(argv: list[str] | None = None) -> int:
         confirm_start(f"The robot turns {abs(args.angle):g} degrees by driving back and forth, "
                       f"legs of up to {args.leg:.2f} m. Clear about 0.5 m all around it, "
                       "including behind.", args.yes)
+        def leg_done(number: int, way: str, turned: float) -> None:
+            print(f"  leg {number} ({way}): {turned:+.1f} degrees so far")
+
         with Robot() as robot:
-            end, legs = robot.turn_around(args.angle, leg_m=args.leg, power=args.power)
+            end, legs = robot.turn_around(args.angle, leg_m=args.leg, power=args.power,
+                                          on_leg=leg_done)
             print(f"Turned {math.degrees(end.heading):+.1f} degrees (target {args.angle:+g}) "
                   f"in {legs} legs; ended {math.hypot(end.x, end.y):.2f} m from the start.")
 

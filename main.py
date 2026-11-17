@@ -37,8 +37,17 @@ def describe(path: Path) -> str:
     return doc.strip().splitlines()[0] if doc else path.name
 
 
+def python() -> str:
+    """The project's virtual environment, if there is one: the scripts then find its packages
+    (DepthAI) even when it wasn't activated."""
+    for candidate in (ROOT / ".venv" / "bin" / "python", ROOT / ".venv" / "Scripts" / "python.exe"):
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
 def run_script(path: Path, args: list[str]) -> int:
-    process = subprocess.Popen([sys.executable, str(path), *args], cwd=ROOT)
+    process = subprocess.Popen([python(), str(path), *args], cwd=ROOT)
     while True:
         try:
             return process.wait()

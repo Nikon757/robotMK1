@@ -11,6 +11,7 @@ CPU. Uses the DepthAI v2 API (depthai>=2.30,<3).
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,14 @@ class OakMjpegCamera:
     def start(self) -> "OakMjpegCamera":
         import depthai as dai           # imported here, so the rest of the package works without it
 
+        if not hasattr(dai, "Pipeline"):
+            if sys.prefix == sys.base_prefix:           # not running inside a virtual environment
+                raise RuntimeError("DepthAI isn't installed for this Python: the script runs outside "
+                                   "the project's virtual environment. Activate it first "
+                                   "(source .venv/bin/activate), or start the script from main.py.")
+            where = getattr(dai, "__file__", None) or list(getattr(dai, "__path__", []))
+            raise RuntimeError(f"'import depthai' found {where}, not the DepthAI library. A folder "
+                               "named depthai is in the way: rename it, or run from another folder.")
         pipeline = dai.Pipeline()
         cam = pipeline.create(dai.node.ColorCamera)
         cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)

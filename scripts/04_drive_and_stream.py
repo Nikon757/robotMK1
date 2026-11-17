@@ -14,7 +14,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repository root, for "modules"
+# The repository root, for "modules". Appended, not prepended: installed libraries must win
+# over project folders with the same name (the project has a depthai/ folder).
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from modules.camera import CameraPan, MjpegServer, OakMjpegCamera
 from modules.engines import Robot, load_config

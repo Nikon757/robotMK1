@@ -23,17 +23,22 @@ from .board import NiumoBoard, open_board
 from .config import load_config
 
 LOOP_S = 0.05               # control loop; @M is re-sent every pass (board watchdog: 0.5 s)
-STEER_SETTLE_S = 0.3        # time for the steering servo to reach a new position
+STEER_SETTLE_S = 0.3        # time for the steering servo to move by a full lock (0 -> 1)
 STOP_SETTLE_S = 0.4         # time for the robot to roll to a stop after the motors are cut
 HEADING_GAIN = 2.0          # straight driving: steering amount per radian of heading error
 MAX_DRIFT_DEG = 20.0        # straight driving: give up beyond this heading error
-DIRECTION_CHECK_M = 0.08    # distance after which a turn must have started the right way
+CHECK_FROM_M = 0.05         # turns: the direction is checked between these two distances,
+CHECK_TO_M = 0.12           #   after the wheels have rolled and finished any steering change
 TAPER_DEG = 15.0            # turns: the wheels start straightening this far before the target
 FINISH_TOL_DEG = 1.0        # turns: done this close to the target heading
 
 
 class MotionError(RuntimeError):
     """A motion was stopped early: stall, board restart, wrong steering direction, timeout."""
+
+
+class SteeringDirectionError(MotionError):
+    """A turn went the wrong way, or didn't turn at all."""
 
 
 @dataclass
@@ -110,11 +115,11 @@ class Robot:
         amount = max(-1.0, min(1.0, amount))
         end = self.steer_left if amount > 0 else self.steer_right
         command = round(self.steer_center + abs(amount) * (end - self.steer_center))
-        changed = self._steer_amount is None or abs(amount - self._steer_amount) > 0.05
+        change = 1.0 if self._steer_amount is None else abs(amount - self._steer_amount)
         self.board.steer(command)
         self._steer_amount = amount
-        if wait and changed:
-            time.sleep(STEER_SETTLE_S)
+        if wait and change > 0.05:          # a full left-to-right swing (2.0) waits twice as long
+            time.sleep(STEER_SETTLE_S * max(1.0, change))
 
     def stop(self) -> None:
         self.board.halt()
@@ -180,6 +185,7 @@ class Robot:
         turn = 1 if angle_deg >= 0 else -1
         backwards = -1 if reverse else 1
         goal = math.radians(abs(angle_deg))
+        check_from: Optional[float] = None
         checked = False
 
         def steering(pose: Pose) -> float:
@@ -193,16 +199,21 @@ class Robot:
         self.steer(steering(start))
 
         def done(pose: Pose) -> bool:
-            nonlocal checked
+            nonlocal check_from, checked
             turned = (pose.heading - start.heading) * turn
             travelled = abs(pose.distance - start.distance)
-            if not checked and travelled >= DIRECTION_CHECK_M:
-                if turned < 0:
-                    raise MotionError("The robot turned the wrong way: swap steering.left and "
-                                      "steering.right in config/robot.yaml.")
-                if turned < math.radians(1):
-                    raise MotionError("The robot isn't turning: is the steering servo plugged "
-                                      "into PB14 and the battery on?")
+            # Judge the direction only once the wheels have rolled a little: standing tyres
+            # resist the steering, so the wheels may finish their swing only while rolling.
+            if check_from is None and travelled >= CHECK_FROM_M:
+                check_from = turned
+            if not checked and check_from is not None and travelled >= CHECK_TO_M:
+                change = turned - check_from
+                if change < -math.radians(1):
+                    raise SteeringDirectionError("The robot turned the wrong way: swap steering.left "
+                                                 "and steering.right in config/robot.yaml.")
+                if change < math.radians(1):
+                    raise SteeringDirectionError("The robot isn't turning: is the steering servo "
+                                                 "plugged into PB14 and the battery on?")
                 checked = True
             if max_distance_m is not None and travelled >= max_distance_m:
                 return True
@@ -212,10 +223,12 @@ class Robot:
                          timeout=timeout, what="Turning")
 
     def turn_around(self, angle_deg: float = 180.0, leg_m: float = 0.30,
-                    power: Optional[int] = None, max_legs: int = 12) -> tuple[Pose, int]:
+                    power: Optional[int] = None, max_legs: int = 12,
+                    on_leg: Optional[Callable[[int, str, float], None]] = None) -> tuple[Pose, int]:
         """Turn on the spot the way a car does: forward arcs at full lock alternate with
         backward arcs steered the other way, each at most leg_m long, until the heading has
-        changed by angle_deg (+ = left). Returns the final pose and the number of legs."""
+        changed by angle_deg (+ = left). Returns the final pose and the number of legs.
+        on_leg(leg number, "forward"/"backward", degrees turned so far) is called after each leg."""
         start = replace(self._sync())
         turn = 1 if angle_deg >= 0 else -1
         goal = math.radians(abs(angle_deg))
@@ -226,9 +239,20 @@ class Robot:
                 break
             if legs >= max_legs:
                 raise MotionError(f"The turn wasn't finished after {max_legs} legs.")
-            self.turn_by(turn * math.degrees(remaining), power=power,
-                         reverse=legs % 2 == 1, max_distance_m=leg_m)
+            way = "backward" if legs % 2 else "forward"
+            try:
+                self.turn_by(turn * math.degrees(remaining), power=power,
+                             reverse=legs % 2 == 1, max_distance_m=leg_m)
+            except SteeringDirectionError:
+                if legs == 0:
+                    raise
+                raise MotionError(
+                    f"Leg {legs + 1} ({way}) didn't turn the way leg 1 did, so the steering didn't "
+                    "reach its new position. The front tyres resist steering while the robot stands "
+                    "still: check that the steering servo has power and isn't straining.") from None
             legs += 1
+            if on_leg is not None:
+                on_leg(legs, way, math.degrees(self.pose.heading - start.heading))
         self.steer(0.0)
         return self.pose, legs
 
