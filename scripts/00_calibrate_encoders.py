@@ -8,6 +8,11 @@ counts_per_wheel_rev and counts_per_metre into config/robot.yaml. Scripts 01-04 
 Driving method (--drive): the robot drives straight on the floor for --seconds, then you
 type the distance you measured with a tape. This is more accurate, because a loaded tyre
 rolls a little smaller than its measured diameter. Run it after the hand method.
+
+Turn method (--track): the robot turns --angle degrees by driving back and forth (like
+script 02), then you type how far it really turned. The script works out the effective
+track width the heading calculation needs (odometry_track_m): wide tyres and side-slip
+make it smaller than the tyre-centre distance. Run it after the other two.
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repository root, for "modules"
 
-from modules.engines import load_config, open_board, save_value
+from modules.engines import Robot, load_config, open_board, save_value
 from modules.script_tools import confirm_start, run
 
 
@@ -73,17 +78,43 @@ def by_driving(board, cfg: dict, power: int, seconds: float, skip: bool) -> None
     print(f"Saved counts_per_metre = {per_metre:.1f}" + (f" (was {old})" if old else ""))
 
 
+def by_turning(cfg: dict, angle: float, skip: bool) -> None:
+    confirm_start(f"The robot turns {angle:g} degrees by driving back and forth (like script 02). "
+                  "Before it starts, lay a strip of tape on the floor along its left side; afterwards "
+                  "you measure how far it really turned. Clear about 0.5 m all around it.", skip)
+    with Robot(config=cfg) as robot:
+        track_used = robot.odometry.track_m
+        end, _ = robot.turn_around(angle)
+    measured = abs(math.degrees(end.heading))
+    print(f"\nThe encoders say {measured:.1f} degrees (with a track of {track_used:.4f} m).\n"
+          "For a 180-degree turn: if the robot's side is now parallel to the tape, it turned 180;\n"
+          "if it went further, add the angle between its side and the tape (e.g. 180 + 30 = 210).")
+    real = abs(float(input("How many degrees did the robot really turn? ")))
+    if not 0.5 * measured < real < 2 * measured:
+        raise RuntimeError(f"{real:g} degrees is too far from the encoders' {measured:.1f}: measure again.")
+    track = track_used * measured / real
+    save_value("chassis", "odometry_track_m", round(track, 4),
+               comment="effective track for the heading; set by scripts/00_calibrate_encoders.py --track")
+    print(f"Saved odometry_track_m = {track:.4f} m "
+          f"(the measured tyre-centre track is {cfg['chassis']['rear_track_m']} m).")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--turns", type=int, default=5, help="wheel turns by hand (default 5)")
     parser.add_argument("--drive", action="store_true", help="driving method instead of by hand")
     parser.add_argument("--seconds", type=float, default=3.0, help="driving time for --drive")
     parser.add_argument("--power", type=int, help="motor power for --drive (default: drive.power)")
+    parser.add_argument("--track", action="store_true", help="turn method: calibrate the effective track")
+    parser.add_argument("--angle", type=float, default=180.0, help="turn for --track, degrees (default 180)")
     parser.add_argument("--yes", action="store_true", help="don't ask before driving")
     args = parser.parse_args(argv)
     cfg = load_config()
 
     def work() -> None:
+        if args.track:
+            by_turning(cfg, args.angle, args.yes)
+            return
         with open_board(cfg["board"].get("port")) as board:
             if args.drive:
                 by_driving(board, cfg, args.power or int(cfg["drive"]["power"]), args.seconds, args.yes)

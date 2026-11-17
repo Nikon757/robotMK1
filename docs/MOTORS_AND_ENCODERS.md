@@ -281,9 +281,29 @@ with NiumoBoard() as board:
   `pi_examples/niumo_examples.py` does this. Repeat 3 times and average.
 
 **Track width `W`** (for the heading formula):
-- Measure it between the centres of the rear tyres' contact patches.
-- Then refine it with the UMBmark square test [4]: drive a square clockwise and
-  counter-clockwise and correct from the error at the end.
+- **Measure it** between the centres of the rear tyres: 200 mm outside width − 35 mm tyre
+  = **0.165 m** on RobotMK1 (`chassis.rear_track_m`).
+- **Calibrate the effective value for the heading.** The heading uses the track that matches
+  the robot's real rotation, which can differ from the measured one. On 17 Nov 2026 a turn
+  that the encoders reported as 181.5° was really about 210°: the effective track was about
+  **0.143 m**, 14 % less. Likely reasons:
+  - the wide tyres touch the floor nearer their inner edges than their centres;
+  - the tyres slip sideways in full-lock turns.
+
+  `python scripts/00_calibrate_encoders.py --track` does this calibration:
+  1. the robot turns 180°;
+  2. you type how far it really turned;
+  3. the script saves `chassis.odometry_track_m = track used × encoder angle / real angle`.
+
+  For an accurate reading, lay a strip of tape along the robot's side before the turn and
+  measure the angle between its side and the tape afterwards. A 360° turn (`--angle 360`)
+  halves the relative error.
+- **Refine with UMBmark** [4]: drive a square clockwise and counter-clockwise and correct
+  from the error at the end.
+- **The limit of this approach:** the effective track depends on how much the tyres slip,
+  and that changes with the manoeuvre and the floor. For a heading that doesn't depend on
+  slip, the camera's gyroscope is the better source. The ROS 2 plan fuses it with the wheels
+  (ROADMAP.md §4.2, §6.1).
 
 ---
 

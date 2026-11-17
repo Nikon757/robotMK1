@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repository root, for "modules"
 
-from modules.camera import MjpegServer, OakMjpegCamera
+from modules.camera import CameraPan, MjpegServer, OakMjpegCamera
 from modules.engines import Robot, load_config
 from modules.script_tools import confirm_start, run
 
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
             confirm_start(f"\nThe robot drives {args.distance:.2f} m straight forward. "
                           f"Clear at least {args.distance + 0.3:.1f} m ahead.", args.yes)
             with Robot() as robot:
-                robot.board.cam_pan(int(cfg["camera_pan"]["center"]))
+                CameraPan(robot.board, cfg)             # centres the camera, taking up the play
                 end = robot.forward(args.distance, power=args.power)
                 print(f"Drove {end.distance:+.3f} m; heading change {math.degrees(end.heading):+.1f} degrees.")
             if args.keep_streaming > 0:

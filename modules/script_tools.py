@@ -24,3 +24,8 @@ def run(main: Callable[[], int | None]) -> int:
     except (MotionError, RuntimeError) as exc:
         print(f"\nStopped: {exc}")
         return 1
+    except OSError as exc:              # includes serial.SerialException
+        print(f"\nLost the connection to the control board ({exc}).\n"
+              "A USB dropout usually comes from a power dip when a servo or motor draws a lot of "
+              "current. Check `ls -l /dev/robot_mcu` and the power supply, then try again.")
+        return 1

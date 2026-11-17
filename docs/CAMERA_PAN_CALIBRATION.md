@@ -306,6 +306,40 @@ After flashing the final build, the commands in §6.6 were run (30 Oct). The cam
 The operator confirmed that everything worked as intended. The firmware build had 0 errors
 and 0 warnings.
 
+### 9.1 Direction-dependent error (found 17 Nov 2026)
+
+**Symptom.** Running script 05 (left, right, centre), the camera didn't return fully to the
+centre after the far-right position.
+
+**Tests.** Each test commands a start position, waits 2 s, then sends `@S2 90` (1167 µs):
+
+| Start command | Approach to the centre | Result |
+|---|---|---|
+| `@S2 30` (far right, 500 µs) | from the right, turning left | stopped **5–10° right** of centre |
+| `@S2 60` (30° right, no end stop involved) | from the right, turning left | stopped **5–10° right** of centre |
+| `@S2 152` (far left) | from the left, turning right | stopped **exactly** on centre |
+
+**Interpretation.** The error depends on the direction of approach, not on the end stop: the
+pan mechanism has 5–10° of **hysteresis**. Possible sources:
+- play between the servo arm and the camera mount;
+- friction;
+- the camera's USB cable pulling against the servo near its target.
+
+The centre (1167 µs) had been found in run 3 while the camera was turning **right**, i.e.
+approaching from the left. So it is correct only for that approach direction.
+
+**Correction (software).** `modules/camera/pan.py` makes every movement end in the
+calibration direction, turning right. A move that would arrive from the right first goes
+12° past the target to the left (`approach_overshoot_deg`, more than the 5–10° of play), then
+comes back. This is the standard way to make a positioning mechanism with backlash
+repeatable: always approach the target from the same side.
+
+**Not affected by this correction:** commands sent straight to the board, such as `@R`, or
+the start-up centring in the firmware. They still land 5–10° off when coming from the right.
+Before mapping, centre the camera through `CameraPan`, not with `@R`. Doing the same approach
+in the firmware is an open item (DEVELOPMENT.md §9). A firmer mount, with less play, would
+reduce the hysteresis itself.
+
 ---
 
 ## 10. Accuracy and limitations
@@ -324,14 +358,17 @@ These points should be stated honestly in the thesis:
 3. **Observation was visual and qualitative.** "Straight ahead" and "far enough" were the
    operator's judgement. There was no protractor, target or image measurement. This is
    adequate for setting safe limits and a working centre, but not for a precise angle model.
-4. **Not characterised:**
-   - the servo's deadband, backlash, hysteresis (approaching from left vs right) and
-     repeatability;
+4. **Hysteresis: measured roughly, corrected in software.** Approaching from the right leaves
+   the camera 5–10° short; approaching from the left is exact (§9.1). The pan module now
+   always approaches from the left. Its exact size and repeatability were not measured;
+   §11 describes how.
+5. **Not characterised:**
+   - the servo's deadband and repeatability;
    - temperature and load effects;
    - behaviour while the robot moves.
-5. **Pulse timing.** The pulse width itself is accurate to the timer resolution (1 µs), with
+6. **Pulse timing.** The pulse width itself is accurate to the timer resolution (1 µs), with
    the crystal-based clock error, which is negligible compared with the items above [1].
-6. **Reason for the left stop.** The operator chose the left limit at 1889 µs ("as far as it
+7. **Reason for the left stop.** The operator chose the left limit at 1889 µs ("as far as it
    should go"), although run 2 had found no contact up to 2500 µs. Record the reason (for
    example, cable slack or field of view) in the thesis.
 

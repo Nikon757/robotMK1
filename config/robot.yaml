@@ -8,13 +8,14 @@ chassis:
   wheel_diameter_m: 0.095
   wheelbase_m: 0.185          # rear axle to front axle: 280 mm outer length - 95 mm wheel (front wheels assumed 95 mm)
   rear_track_m: 0.165         # rear tyre centre to tyre centre: 200 mm outer width - 35 mm tyre
+  odometry_track_m: null      # effective track for the heading; set by scripts/00_calibrate_encoders.py --track
   counts_per_wheel_rev: null  # set by scripts/00_calibrate_encoders.py
   counts_per_metre: null      # set by scripts/00_calibrate_encoders.py; scripts 01-04 need it
 
 steering:                     # @S1 commands; the firmware limits them to 63..126
   center: 90                  # MEASURE: the command that drives straight
-  left: 126                   # full left lock. If a script reports that the robot turns the wrong way, swap left and right
-  right: 63                   # full right lock
+  left: 63                    # full left lock (checked on the robot 17 Nov 2026: 126 turns right)
+  right: 126                  # full right lock
   full_lock_deg: 30           # MEASURE: front-wheel angle at full lock (only used to share power between the rear wheels)
 
 drive:
@@ -25,7 +26,10 @@ drive:
 camera_pan:                   # @S2 commands, calibrated 30 Oct 2026 (docs/CAMERA_PAN_CALIBRATION.md)
   center: 90                  # straight ahead
   left: 152                   # about 62 degrees left
-  right: 30                   # about 60 degrees right
+  right: 30                   # about 60 degrees right; 500 us, the end of the servo's own travel
+  end_margin_deg: 3           # scripts stop this far inside left/right, so the servo never presses against an end stop
+  approach_from: left         # end every move turning right, as when the centre was calibrated: the mount has 5-10 deg of play
+  approach_overshoot_deg: 12  # a move that would arrive from the right first goes this far past the target
   speed_deg_s: 30             # how fast the pan moves in the scripts
 
 camera_stream:

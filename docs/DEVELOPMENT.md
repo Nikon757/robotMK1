@@ -365,6 +365,7 @@ left, with the cable clear. Pan constants: 500 / 1167 / 1856 µs. Details in
 | Update `robot_mapping/common/mcu.py` | Real encoder counts, parse `#I`, use `/dev/robot_mcu`, send a heartbeat (`@P`) so the OLED could show `NO PI LINK` |
 | Motor PWM at ~20 kHz and a closed-loop speed command | `compute_pid.c` is available in the project |
 | Remove the unused MPU6050 support | Board IMU dropped on 14 Nov 2026 (camera IMU only) |
+| Centre the camera pan from the left in the firmware too (`@R` and start-up) | The mount has 5–10° of hysteresis; approaching from the right lands short (CAMERA_PAN_CALIBRATION.md §9.1). The Pi-side `CameraPan` already does this. |
 
 The project moved into the `robotMK1` repository on 14 Nov 2026. Older copies of the firmware
 are archived outside it, so the earlier item "sync v2 into the other copies" no longer applies.

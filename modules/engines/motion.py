@@ -28,6 +28,8 @@ STOP_SETTLE_S = 0.4         # time for the robot to roll to a stop after the mot
 HEADING_GAIN = 2.0          # straight driving: steering amount per radian of heading error
 MAX_DRIFT_DEG = 20.0        # straight driving: give up beyond this heading error
 DIRECTION_CHECK_M = 0.08    # distance after which a turn must have started the right way
+TAPER_DEG = 15.0            # turns: the wheels start straightening this far before the target
+FINISH_TOL_DEG = 1.0        # turns: done this close to the target heading
 
 
 class MotionError(RuntimeError):
@@ -90,7 +92,10 @@ class Robot:
         self.stall_s = float(drive["stall_s"])
 
         self.board = board or open_board(self.cfg["board"].get("port"))
-        self.odometry = Odometry(float(chassis["counts_per_metre"]), self.track)
+        # The heading uses the effective track from the turn calibration when there is one:
+        # wide tyres and side-slip make it smaller than the measured tyre-centre distance.
+        odometry_track = float(chassis.get("odometry_track_m") or self.track)
+        self.odometry = Odometry(float(chassis["counts_per_metre"]), odometry_track)
         self._steer_amount: Optional[float] = None
         self._sync()
         self.steer(0.0)
@@ -115,7 +120,14 @@ class Robot:
         self.board.halt()
 
     def close(self) -> None:
-        self.board.close()                  # also stops the motors
+        """Straighten the steering and stop the motors. Runs at the end of every
+        `with Robot()` block, also after an error or Ctrl+C."""
+        try:
+            self.steer(0.0)
+        except OSError:
+            pass                            # the board connection is gone: nothing to straighten
+        finally:
+            self.board.close()              # also stops the motors
 
     def __enter__(self) -> "Robot":
         return self
@@ -145,7 +157,13 @@ class Robot:
         def slow_down(pose: Pose) -> float:         # gentler in the last 10 cm: less overshoot
             return max(0.5, min(1.0, (goal - travelled(pose)) / 0.10))
 
-        end = self._run(level, done, hold_heading=start.heading, slow_down=slow_down,
+        direction = 1 if level >= 0 else -1         # backwards, steering acts the other way
+
+        def steering(pose: Pose) -> float:          # hold the start heading
+            error = start.heading - pose.heading
+            return max(-0.4, min(0.4, HEADING_GAIN * error * direction))
+
+        end = self._run(level, done, steer_fn=steering, slow_down=slow_down,
                         timeout=timeout, what="Driving straight")
         self.steer(0.0, wait=False)
         return end
@@ -162,8 +180,17 @@ class Robot:
         turn = 1 if angle_deg >= 0 else -1
         backwards = -1 if reverse else 1
         goal = math.radians(abs(angle_deg))
-        self.steer(turn * backwards * abs(steer))
         checked = False
+
+        def steering(pose: Pose) -> float:
+            """Full steer until TAPER_DEG before the target, then less and less: the wheels
+            straighten while the robot still rolls, like a car leaving a bend. Stationary
+            tyres grip the floor too hard for the servo to straighten them fully."""
+            remaining = goal - (pose.heading - start.heading) * turn
+            amount = min(abs(steer), max(0.0, remaining) / math.radians(TAPER_DEG))
+            return turn * backwards * amount
+
+        self.steer(steering(start))
 
         def done(pose: Pose) -> bool:
             nonlocal checked
@@ -179,10 +206,10 @@ class Robot:
                 checked = True
             if max_distance_m is not None and travelled >= max_distance_m:
                 return True
-            return turned >= goal
+            return turned >= goal - math.radians(FINISH_TOL_DEG)
 
-        return self._run(backwards * abs(power or self.power), done, timeout=timeout,
-                         what="Turning")
+        return self._run(backwards * abs(power or self.power), done, steer_fn=steering,
+                         timeout=timeout, what="Turning")
 
     def turn_around(self, angle_deg: float = 180.0, leg_m: float = 0.30,
                     power: Optional[int] = None, max_legs: int = 12) -> tuple[Pose, int]:
@@ -217,16 +244,16 @@ class Robot:
         return power * (1 - k), power * (1 + k)
 
     def _run(self, power: float, done: Callable[[Pose], bool], *,
-             hold_heading: Optional[float] = None,
+             steer_fn: Optional[Callable[[Pose], float]] = None,
              slow_down: Optional[Callable[[Pose], float]] = None,
              timeout: float = 30.0, what: str = "The motion") -> Pose:
-        """Power the motors until done(pose) is true; always stops the motors at the end."""
+        """Power the motors until done(pose) is true; always stops the motors at the end.
+        steer_fn(pose) gives the steering amount on every pass; slow_down(pose) scales the power."""
         board = self.board
         reboots = board.reboots
         pose = self._sync()
         started = last_move = time.monotonic()
         last_counts = (board.encoders.left, board.encoders.right)
-        direction = 1 if power >= 0 else -1
         try:
             while not done(pose):
                 now = time.monotonic()
@@ -242,9 +269,8 @@ class Robot:
                     raise MotionError("The wheels aren't turning although the motors are powered: "
                                       "battery on? Robot blocked? Otherwise raise drive.power in "
                                       "config/robot.yaml.")
-                if hold_heading is not None:
-                    error = hold_heading - pose.heading
-                    self.steer(max(-0.4, min(0.4, HEADING_GAIN * error * direction)), wait=False)
+                if steer_fn is not None:
+                    self.steer(steer_fn(pose), wait=False)
                 level = power * (min(1.0, (now - started) / self.ramp_s) if self.ramp_s > 0 else 1.0)
                 if slow_down is not None:
                     level *= slow_down(pose)

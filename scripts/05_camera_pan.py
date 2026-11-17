@@ -2,7 +2,8 @@
 """Camera pan: turn to the far left, then the far right, then back to the centre.
 
 The limits come from config/robot.yaml (camera_pan, calibrated 30 Oct 2026): about 62 degrees
-left and 60 degrees right of straight ahead. The wheels don't move.
+left and 60 degrees right of straight ahead. The camera stops end_margin_deg (3) degrees inside
+them, so the servo never presses against its own end stop. The wheels don't move.
 """
 from __future__ import annotations
 
