@@ -330,9 +330,22 @@ approaching from the left. So it is correct only for that approach direction.
 
 **Correction (software).** `modules/camera/pan.py` makes every movement end in the
 calibration direction, turning right. A move that would arrive from the right first goes
-12° past the target to the left (`approach_overshoot_deg`, more than the 5–10° of play), then
-comes back. This is the standard way to make a positioning mechanism with backlash
-repeatable: always approach the target from the same side.
+past the target to the left (`approach_overshoot_deg`), then comes back. This is the standard
+way to make a positioning mechanism with backlash repeatable: always approach the target from
+the same side.
+
+**Second iteration (17 Nov 2026).** The first version came back 12° past the target in a slow
+sweep, 1 command degree every 33 ms. Script 05 then ended **3–5° off** the position the
+camera had before the script. The successful test above differs in two ways: the camera came
+back in **one jump** (a single `@S2 90`), and from 62° away rather than 12°. A likely cause is
+the servo's deadband under load: each 1° step is too small a position error for the loaded
+servo to overcome friction and the cable, so it stops short of the end of a slow sweep. A
+12° return also left little margin over the 5–10° of play. The module now reproduces the
+successful test: it sweeps slowly to 20° past the target (about twice the play), pauses
+0.3 s, then sends the target in a single command. Whether this removes the error must be
+checked on the robot. The direction of the remaining error (left or right of centre) tells
+the two causes apart: short of the target (left of centre) points to the deadband, past it
+(right of centre) to the play not being fully taken up.
 
 **Not affected by this correction:** commands sent straight to the board, such as `@R`, or
 the start-up centring in the firmware. They still land 5–10° off when coming from the right.

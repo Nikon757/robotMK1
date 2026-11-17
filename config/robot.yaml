@@ -29,7 +29,7 @@ camera_pan:                   # @S2 commands, calibrated 30 Oct 2026 (docs/CAMER
   right: 30                   # about 60 degrees right; 500 us, the end of the servo's own travel
   end_margin_deg: 3           # scripts stop this far inside left/right, so the servo never presses against an end stop
   approach_from: left         # end every move turning right, as when the centre was calibrated: the mount has 5-10 deg of play
-  approach_overshoot_deg: 12  # a move that would arrive from the right first goes this far past the target
+  approach_overshoot_deg: 20  # the final approach: a jump from this far to the approach side (about twice the play)
   speed_deg_s: 30             # how fast the pan moves in the scripts
 
 camera_stream:

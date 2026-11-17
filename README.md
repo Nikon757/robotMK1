@@ -44,6 +44,7 @@ the Git history (commit a9deefa), for example its ROS 2 Dockerfile.
 | [docs/MOTORS_AND_ENCODERS.md](docs/MOTORS_AND_ENCODERS.md) | Motor control and encoder telemetry: signals, decoding, `#T`, odometry, calibration |
 | [docs/CAMERA_PAN_CALIBRATION.md](docs/CAMERA_PAN_CALIBRATION.md) | How the camera pan servo was calibrated |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Development record of firmware v2: decisions, problems and solutions, references |
+| [docs/BASELINE_TEST_2026-11-17.md](docs/BASELINE_TEST_2026-11-17.md) | First test of the robot with the Pi scripts: procedure, problems found, fixes, open items |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Next stages: ROS 2 mapping, Nav2, people tracking, evaluation plan |
 
 ## Status (November 2026)

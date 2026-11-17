@@ -5,9 +5,11 @@ Positions are @S2 command angles: 90 = straight ahead, higher = left, lower = ri
 
 The pan mount has 5-10 degrees of play (measured 17 Nov 2026): approached from the left the
 camera stops exactly on target, approached from the right it stops short. So every move
-ends in the same direction as when the centre was calibrated (approach_from in robot.yaml):
-a move that would arrive from the other side first goes approach_overshoot_deg past the
-target, then comes back.
+ends in the same direction as when the centre was calibrated (approach_from in robot.yaml),
+and the same way as in that test: the camera turns slowly to approach_overshoot_deg on the
+approach side of the target, stops, then jumps the rest of the way in one command. Sweeping
+1 degree at a time all the way in left it 3-5 degrees off: near the target each step is too
+small for the loaded servo to follow.
 """
 from __future__ import annotations
 
@@ -16,6 +18,9 @@ from typing import Optional
 
 from ..engines.board import NiumoBoard
 from ..engines.config import load_config
+
+PAUSE_S = 0.3           # at rest at the approach start before the final jump
+ARRIVE_S = 0.4          # the servo covers the final jump and settles
 
 
 class CameraPan:
@@ -28,10 +33,11 @@ class CameraPan:
         self.speed_deg_s = float(cfg["speed_deg_s"])
         self.end_margin = int(cfg.get("end_margin_deg", 3))
         self.approach_from = str(cfg.get("approach_from", "left"))
-        self.overshoot = int(cfg.get("approach_overshoot_deg", 12))
+        self.overshoot = int(cfg.get("approach_overshoot_deg", 20))
         self.low, self.high = sorted((self.left, self.right))
+        self.inner_low, self.inner_high = sorted((self._inside(self.left), self._inside(self.right)))
 
-        # The servo's position at start is unknown: jump to the approach side of the centre,
+        # The servo's position at start is unknown: jump to the approach start of the centre,
         # then come to the centre the calibrated way.
         self.angle = self._approach_start(self.center)
         board.cam_pan(self.angle)
@@ -39,15 +45,17 @@ class CameraPan:
         self.go_to(self.center)
 
     def go_to(self, angle: int, speed_deg_s: Optional[float] = None) -> None:
-        """Turn slowly to angle, within the calibrated limits, always arriving from the
-        approach side so the play in the mount doesn't shift the end position."""
+        """Turn slowly to the approach start of angle, then jump the rest of the way, so the
+        camera always arrives from the approach side and the play in the mount doesn't shift
+        the end position."""
         target = max(self.low, min(self.high, int(angle)))
         start = self._approach_start(target)
-        if self._needs_detour(target, start):
-            self._sweep(start, speed_deg_s)
-        self._sweep(target, speed_deg_s)
-        self.board.cam_pan(target)          # once more, in case a step was lost
-        time.sleep(0.2)                     # let the servo arrive
+        self._sweep(start, speed_deg_s)
+        if start != target:
+            time.sleep(PAUSE_S)
+            self.board.cam_pan(target)
+            self.angle = target
+        time.sleep(ARRIVE_S)
 
     def look_left(self, speed_deg_s: Optional[float] = None) -> None:
         self.go_to(self._inside(self.left), speed_deg_s)
@@ -60,21 +68,13 @@ class CameraPan:
 
     # ---- helpers ----------------------------------------------------------------------
     def _approach_start(self, target: int) -> int:
-        """Where the final approach to target starts: overshoot degrees to the approach side."""
+        """Where the final jump to target starts: overshoot degrees to the approach side, but
+        never past the end margins (so the far end on the approach side has no jump)."""
         if self.approach_from == "left":           # higher command = further left
-            return min(self.high, target + self.overshoot)
+            return max(target, min(self.inner_high, target + self.overshoot))
         if self.approach_from == "right":
-            return max(self.low, target - self.overshoot)
+            return min(target, max(self.inner_low, target - self.overshoot))
         return target
-
-    def _needs_detour(self, target: int, start: int) -> bool:
-        """True unless the camera is already at or beyond the approach start, so that the
-        direct move to target covers the whole approach in the right direction."""
-        if self.approach_from == "left":
-            return self.angle < start
-        if self.approach_from == "right":
-            return self.angle > start
-        return False
 
     def _sweep(self, target: int, speed_deg_s: Optional[float]) -> None:
         """One degree at a time, so the camera turns smoothly."""
