@@ -1,0 +1,8 @@
+# RobotMK1 Python packages for the Raspberry Pi (Raspberry Pi OS, Python 3.11-3.13).
+# Installed into .venv by setup_venv.sh.
+pyserial>=3.5           # control board (motors, servos, encoders)
+PyYAML>=6.0             # config/robot.yaml
+numpy>=1.26,<3
+depthai>=2.30,<3        # OAK-D Lite, DepthAI v2 API (the camera module is written for it)
+opencv-python>=4.10,<5  # image processing in notebooks and future modules
+jupyterlab>=4.0         # notebooks, opened from a laptop's browser

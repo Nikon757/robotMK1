@@ -6,34 +6,52 @@ A mapping robot on an Ackermann chassis:
 - an LDROBOT STL-27L LiDAR;
 - a Niumo V5 control board (STM32F103) driving the motors and servos.
 
+## Quick start on the Pi
+
+```bash
+cd ~/robotMK1 && bash setup_venv.sh          # once: virtual environment + packages
+source .venv/bin/activate && python main.py  # console menu with the scripts
+```
+
+The full setup (USB names, camera, Hailo-8, Jupyter Lab, ROS 2 in Docker) is in
+[docs/INSTALL_PI.md](docs/INSTALL_PI.md).
+
 ## Repository layout
 
-| Folder | Contents |
+| Path | Contents |
 |---|---|
+| [`main.py`](main.py) | Console menu: lists the scripts in `scripts/` and runs the one you pick |
+| [`scripts/`](scripts/) | One file per task, numbered. **00** encoder calibration (run first), **01** 45° left turn, **02** turn around by driving back and forth, **03** drive forward, **04** drive while streaming the camera, **05** camera pan left-right-centre. |
+| [`modules/`](modules/) | Python code the scripts and notebooks import: `engines` (board link, motors, steering, encoders, odometry), `camera` (OAK-D stream, pan servo), `lidar` and `npu` (to come) |
+| [`config/`](config/) | `robot.yaml`: all robot settings (geometry, calibration, limits, power); `99-robot-usb.rules`: fixed USB device names |
 | [`firmware/`](firmware/) | Control-board firmware v2 (Keil MDK project); its [README](firmware/README.md) covers wiring, building, flashing and the serial protocol |
-| [`docs/`](docs/) | Project documentation (below) |
-| [`pi_examples/`](pi_examples/) | Standalone Python for the Pi: board client, hardware test, camera-pan sweep |
-| [`robot_mapping/`](robot_mapping/) | Mapping software: RTAB-Map in ROS 2 Docker, and a pure-Python mapper |
+| [`docs/`](docs/) | Documentation (below) |
+| [`ros2/`](ros2/) | ROS 2 mapping and navigation (to come; see the roadmap) |
+| [`mapping_scripts/`](mapping_scripts/), [`depthai/`](depthai/) | Reserved for mapping and DepthAI work |
+| [`pi_examples/`](pi_examples/) | Earlier standalone Pi scripts: board client, `hw_test.py`, `pan_sweep.py` |
+| `requirements.txt`, `pyproject.toml`, `setup_venv.sh` | The Python virtual environment |
 
-ROS 2 navigation packages will be added as described in the roadmap.
+The earlier mapping package `robot_mapping/` was removed from the working tree. It is still in
+the Git history (commit a9deefa), for example its ROS 2 Dockerfile.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
+| [docs/INSTALL_PI.md](docs/INSTALL_PI.md) | Installing everything on Raspberry Pi OS |
 | [firmware/README.md](firmware/README.md) | Firmware features, wiring, build and flash, wire protocol, servo ranges |
-| [docs/PI_GUIDE.md](docs/PI_GUIDE.md) | Talking to the board from the Raspberry Pi: protocol, every module, Python client, examples |
+| [docs/PI_GUIDE.md](docs/PI_GUIDE.md) | Talking to the board from the Pi: protocol, every module, examples |
 | [docs/MOTORS_AND_ENCODERS.md](docs/MOTORS_AND_ENCODERS.md) | Motor control and encoder telemetry: signals, decoding, `#T`, odometry, calibration |
-| [docs/CAMERA_PAN_CALIBRATION.md](docs/CAMERA_PAN_CALIBRATION.md) | How the camera pan servo was calibrated: method, commands, results, accuracy |
+| [docs/CAMERA_PAN_CALIBRATION.md](docs/CAMERA_PAN_CALIBRATION.md) | How the camera pan servo was calibrated |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Development record of firmware v2: decisions, problems and solutions, references |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Next stages: ROS 2 mapping, Nav2, people tracking, project structure, evaluation plan |
-| [robot_mapping/README.md](robot_mapping/README.md) | The mapping software and how to run it |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Next stages: ROS 2 mapping, Nav2, people tracking, evaluation plan |
 
 ## Status (November 2026)
 
-- **Firmware v2:** verified on the robot. The steering, the camera pan (calibrated), both
-  motors and both encoders all work.
-- **Mapping software:** written; not yet run on the real robot.
+- **Firmware v2:** verified on the robot. The steering, the camera pan (calibrated), both motors
+  and both encoders all work.
+- **Scripts 00–05:** tested against a simulated robot; not yet run on the real one. The encoder
+  calibration (script 00) is the first step on the robot.
 - **Inertial data:** comes from the camera's built-in IMU; there is no separate board IMU.
-- **Next steps:** chassis calibration (encoders, steering), the first real map, firmware
-  speed control, then the ROS 2 base. See [docs/ROADMAP.md](docs/ROADMAP.md).
+- **Next steps:** run the scripts on the robot, steering calibration, firmware speed control,
+  then ROS 2 (mapping with slam_toolbox and RTAB-Map, navigation with Nav2).

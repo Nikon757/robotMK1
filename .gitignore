@@ -9,6 +9,8 @@ firmware/JLinkLog.txt
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+.ipynb_checkpoints/
 
 # Data produced on the robot: maps, recordings, model files
 robot_mapping/maps/

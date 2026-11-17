@@ -1,0 +1,14 @@
+# Makes the "modules" package importable from anywhere in the virtual environment
+# (scripts, Jupyter notebooks): setup_venv.sh runs "pip install -e .".
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robotmk1"
+version = "0.1.0"
+description = "RobotMK1 Python modules: motors, camera, LiDAR, NPU"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["modules*"]

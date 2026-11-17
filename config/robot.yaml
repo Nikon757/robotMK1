@@ -1,0 +1,34 @@
+# RobotMK1 settings used by scripts/ and modules/.
+# Distances in metres, angles in degrees. "MEASURE" = still to be measured on the robot.
+
+board:
+  port: /dev/robot_mcu        # udev name (config/99-robot-usb.rules); if missing, the CH340 is found by USB ID
+
+chassis:
+  wheel_diameter_m: 0.095
+  wheelbase_m: 0.185          # rear axle to front axle: 280 mm outer length - 95 mm wheel (front wheels assumed 95 mm)
+  rear_track_m: 0.165         # rear tyre centre to tyre centre: 200 mm outer width - 35 mm tyre
+  counts_per_wheel_rev: null  # set by scripts/00_calibrate_encoders.py
+  counts_per_metre: null      # set by scripts/00_calibrate_encoders.py; scripts 01-04 need it
+
+steering:                     # @S1 commands; the firmware limits them to 63..126
+  center: 90                  # MEASURE: the command that drives straight
+  left: 126                   # full left lock. If a script reports that the robot turns the wrong way, swap left and right
+  right: 63                   # full right lock
+  full_lock_deg: 30           # MEASURE: front-wheel angle at full lock (only used to share power between the rear wheels)
+
+drive:
+  power: 350                  # motor power the scripts use, per-mil of full power (raise if the robot doesn't start)
+  ramp_s: 0.5                 # time to reach that power
+  stall_s: 1.5                # stop if the wheels don't turn for this long while powered
+
+camera_pan:                   # @S2 commands, calibrated 30 Oct 2026 (docs/CAMERA_PAN_CALIBRATION.md)
+  center: 90                  # straight ahead
+  left: 152                   # about 62 degrees left
+  right: 30                   # about 60 degrees right
+  speed_deg_s: 30             # how fast the pan moves in the scripts
+
+camera_stream:
+  port: 8080                  # http://<robot>:8080/ in a browser
+  fps: 15
+  jpeg_quality: 80
