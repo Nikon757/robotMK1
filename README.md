@@ -16,12 +16,35 @@ source .venv/bin/activate && python main.py  # console menu with the scripts
 The full setup (USB names, camera, Hailo-8, Jupyter Lab, ROS 2 in Docker) is in
 [docs/INSTALL_PI.md](docs/INSTALL_PI.md).
 
+## Track demonstration
+
+From `python main.py`, enter `6 --dry-run` to inspect the route or `6 --camera-only`
+to check the depth overlay without opening the motor controller. Enter `6` to run
+the full demonstration. The script prints the browser address for the live feed
+before asking you to start.
+
+Set the straight-leg distances at the top of [script 06](scripts/06_track_demo.py)
+from the physical course. Measure each straight leg between the steering arcs
+and allow room for the robot to sweep through each turn. The supplied distances
+are starting values for rehearsal. Use the encoder distance and turn calibrations
+from script 00 to improve endpoint and heading accuracy. `PAUSE_S` controls the
+timed stop and `DEPTH_*` controls the camera inspection.
+
+At the second stop, the camera pans right. The detector marks the largest connected
+patch of in-range stereo depth inside the inspection area and shows its median
+distance. Place the target inside the configured distance band and keep nearby
+background surfaces outside that band. If the detector times out, the run stops.
+Once a box appears, press Enter in the terminal to recenter the camera and drive
+the final measured leg. The route uses encoder odometry for the bypass and finish.
+RGB and depth are paired on the camera before the Pi draws the overlay.
+[Luxonis DepthAI v2 alignment example](https://github.com/luxonis/depthai-python/blob/v2.33.0.0/examples/StereoDepth/rgb_depth_aligned.py)
+
 ## Repository layout
 
 | Path | Contents |
 |---|---|
 | [`main.py`](main.py) | Console menu: lists the scripts in `scripts/` and runs the one you pick |
-| [`scripts/`](scripts/) | One file per task, numbered. **00** encoder calibration (run first), **01** 45° left turn, **02** turn around by driving back and forth, **03** drive forward, **04** drive while streaming the camera, **05** camera pan left-right-centre. |
+| [`scripts/`](scripts/) | One file per task, numbered. **00** encoder calibration (run first), **01** 45° left turn, **02** turn around by driving back and forth, **03** drive forward, **04** drive while streaming the camera, **05** camera pan left-right-centre, **06** track demonstration with depth inspection. |
 | [`modules/`](modules/) | Python code the scripts and notebooks import: `engines` (board link, motors, steering, encoders, odometry), `camera` (OAK-D stream, pan servo), `lidar` and `npu` (to come) |
 | [`config/`](config/) | `robot.yaml`: all robot settings (geometry, calibration, limits, power); `99-robot-usb.rules`: fixed USB device names |
 | [`firmware/`](firmware/) | Control-board firmware v2 (Keil MDK project); its [README](firmware/README.md) covers wiring, building, flashing and the serial protocol |

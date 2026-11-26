@@ -1,7 +1,7 @@
 """OAK-D Lite colour camera as a live MJPEG stream you can open in any browser.
 
-The JPEG encoding runs on the camera's own video encoder, so streaming costs the Pi almost no
-CPU. Uses the DepthAI v2 API (depthai>=2.30,<3).
+OakMjpegCamera uses the camera's own video encoder. The HTTP server also accepts frames
+processed on the host. Uses the DepthAI v2 API (depthai>=2.30,<3).
 
     from modules.camera import MjpegServer, OakMjpegCamera
     with OakMjpegCamera(fps=15) as camera, MjpegServer(camera, port=8080) as server:
@@ -29,6 +29,8 @@ img{max-width:100%;height:auto;display:block;margin:0 auto}</style></head>
 class OakMjpegCamera:
     """Colour camera at 640x360, JPEG-encoded on the OAK-D Lite."""
 
+    _stream_name = "mjpeg"
+
     def __init__(self, fps: int = 15, quality: int = 80):
         self.fps = fps
         self.quality = quality
@@ -54,6 +56,22 @@ class OakMjpegCamera:
             where = getattr(dai, "__file__", None) or list(getattr(dai, "__path__", []))
             raise RuntimeError(f"'import depthai' found {where}, not the DepthAI library. A folder "
                                "named depthai is in the way: rename it, or run from another folder.")
+        self._device = self._open_device(dai)
+        try:
+            queue = self._device.getOutputQueue(self._stream_name, maxSize=4, blocking=False)
+            self._thread = threading.Thread(target=self._read, args=(queue,), name="oak-mjpeg", daemon=True)
+            self._thread.start()
+        except BaseException:
+            self._device.close()
+            self._device = None
+            self._thread = None
+            raise
+        return self
+
+    def _open_device(self, dai):
+        return dai.Device(self._build_pipeline(dai))
+
+    def _build_pipeline(self, dai):
         pipeline = dai.Pipeline()
         cam = pipeline.create(dai.node.ColorCamera)
         cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)
@@ -66,26 +84,30 @@ class OakMjpegCamera:
         encoder.setQuality(self.quality)
         cam.video.link(encoder.input)
         out = pipeline.create(dai.node.XLinkOut)
-        out.setStreamName("mjpeg")
+        out.setStreamName(self._stream_name)
         encoder.bitstream.link(out.input)
-
-        self._device = dai.Device(pipeline)
-        queue = self._device.getOutputQueue("mjpeg", maxSize=4, blocking=False)
-        self._thread = threading.Thread(target=self._read, args=(queue,), name="oak-mjpeg", daemon=True)
-        self._thread.start()
-        return self
+        return pipeline
 
     def _read(self, queue) -> None:
-        while not self._stop.is_set():
-            packet = queue.tryGet()
-            if packet is None:
-                time.sleep(0.005)
-                continue
-            jpeg = packet.getData().tobytes()
+        try:
+            while not self._stop.is_set():
+                packet = queue.tryGet()
+                if packet is None:
+                    time.sleep(0.005)
+                    continue
+                jpeg = self._encode_frame(packet)
+                with self._new_frame:
+                    self._frame = jpeg
+                    self._frame_id += 1
+                    self._new_frame.notify_all()
+        except Exception as exc:
             with self._new_frame:
-                self._frame = jpeg
-                self._frame_id += 1
+                self._stop.set()
                 self._new_frame.notify_all()
+            print(f"Camera stream stopped ({exc})", file=sys.stderr)
+
+    def _encode_frame(self, packet) -> bytes:
+        return packet.getData().tobytes()
 
     def wait_frame(self, after_id: int = 0, timeout: float = 2.0) -> tuple[int, Optional[bytes]]:
         """The newest frame newer than after_id, as (frame id, JPEG bytes).
