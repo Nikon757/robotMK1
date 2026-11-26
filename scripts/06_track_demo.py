@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from modules.camera import CameraPan, MjpegServer
-from modules.engines import Robot, load_config
+from modules.engines import MotionError, Robot, load_config
 from modules.script_tools import run
 
 
@@ -93,20 +93,27 @@ def require_live_video(camera, timeout: float = 2.0) -> None:
         raise RuntimeError("No live picture from the OAK-D Lite. Check its USB connection.")
 
 
+def drive_turn(robot: Robot, angle_deg: float, label: str) -> None:
+    try:
+        robot.turn_by(angle_deg, steer=TURN_STEER, power=DRIVE_POWER,
+                      max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
+                      slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
+                      stop_lead_deg=TURN_STOP_LEAD_DEG, settled_tolerance_deg=TURN_TOLERANCE_DEG)
+    except MotionError as exc:
+        raise MotionError(f"{label}. {exc}") from exc
+
+
 def follow_route(robot: Robot, camera, steps) -> None:
     for step in steps:
         require_live_video(camera)
-        action, value, _ = step
+        action, value, label = step
         print(describe_step(step), flush=True)
         if action == "drive":
             if value > 0:
                 robot.forward(value, power=DRIVE_POWER, timeout=MOTION_TIMEOUT_S)
             continue
 
-        robot.turn_by(value, steer=TURN_STEER, power=DRIVE_POWER,
-                      max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
-                      slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
-                      stop_lead_deg=TURN_STOP_LEAD_DEG, settled_tolerance_deg=TURN_TOLERANCE_DEG)
+        drive_turn(robot, value, label)
 
 
 # ---- Stationary inspection --------------------------------------------------------
@@ -179,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true", help="print the course without opening hardware")
     mode.add_argument("--camera-only", action="store_true",
                       help="test the detector and stream with the robot stationary")
+    mode.add_argument("--turn-test", type=float, metavar="DEG",
+                      help="drive a single test arc without the camera (negative = right)")
     parser.add_argument("--port", type=int, help="HTTP port (default: camera_stream.port)")
     args = parser.parse_args(argv)
 
@@ -186,6 +195,16 @@ def main(argv: list[str] | None = None) -> int:
         validate_settings()
         if args.dry_run:
             show_route()
+            return
+        if args.turn_test is not None:
+            angle = args.turn_test
+            if not 0 < abs(angle) <= 180:
+                raise RuntimeError("Set the test angle between -180° and +180° and away from zero")
+            print(f"Single {angle:+g}° test turn. Allow room for up to {MAX_TURN_DISTANCE_M:g} m of travel.")
+            wait_for_enter("Press Enter once the test area is clear. Ctrl+C stops the run. ")
+            with Robot() as robot:
+                drive_turn(robot, angle, "Test turn")
+                print(f"Test turn settled at {math.degrees(robot.pose.heading):+.1f}°. The robot is stopped.")
             return
 
         from modules.camera.depth_obstacle import OakObstacleCamera, ObstacleSettings

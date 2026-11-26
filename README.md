@@ -33,8 +33,11 @@ timed stop and `DEPTH_*` controls the camera inspection.
 The demo reduces motor power during the last `TURN_SLOWDOWN_DEG` degrees of each
 turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
 `TURN_STOP_LEAD_DEG` allows a few degrees for coasting. If the settled turn
-misses its target, the error shows the encoder estimates at motor cutoff and
-after settling. A large difference indicates continued rotation after cutoff.
+misses its target, the error names the turn and shows the estimated heading when
+the Pi requested a halt, the settled heading, and the count change for each wheel.
+The Pi repeats the halt command while checking that fresh encoder readings settle.
+Run `6 --turn-test -90` in a clear area to check one right turn without the camera
+or obstacles. Compare the physical angle with the encoder estimate.
 
 At the second stop, the camera pans right. The detector marks the largest connected
 patch of in-range stereo depth inside the inspection area and shows its median

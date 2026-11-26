@@ -19,12 +19,15 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
-from .board import NiumoBoard, open_board
+from .board import Encoders, NiumoBoard, open_board
 from .config import load_config
 
 LOOP_S = 0.05               # control loop; @M is re-sent every pass (board watchdog: 0.5 s)
 STEER_SETTLE_S = 0.3        # time for the steering servo to move by a full lock (0 -> 1)
-STOP_SETTLE_S = 0.4         # time for the robot to roll to a stop after the motors are cut
+STOP_SETTLE_S = 0.4         # minimum time to observe the wheels after the halt command
+STOP_QUIET_MS = 150         # both encoder counts must stay still for this much board time
+STOP_TIMEOUT_S = 1.0       # maximum time to wait for a confirmed stop
+ENCODER_MAX_AGE_S = 0.15   # firmware sends encoder counts every 20 ms
 HEADING_GAIN = 2.0          # straight driving: steering amount per radian of heading error
 MAX_DRIFT_DEG = 20.0        # straight driving: give up beyond this heading error
 CHECK_FROM_M = 0.05         # turns: the direction is checked between these two distances,
@@ -101,6 +104,7 @@ class Robot:
         # wide tyres and side-slip make it smaller than the measured tyre-centre distance.
         odometry_track = float(chassis.get("odometry_track_m") or self.track)
         self.odometry = Odometry(float(chassis["counts_per_metre"]), odometry_track)
+        self._encoder_epoch = self.board.reboots
         self._steer_amount: Optional[float] = None
         self._sync()
         self.steer(0.0)
@@ -168,8 +172,8 @@ class Robot:
             error = start.heading - pose.heading
             return max(-0.4, min(0.4, HEADING_GAIN * error * direction))
 
-        end = self._run(level, done, steer_fn=steering, slow_down=slow_down,
-                        timeout=timeout, what="Driving straight")
+        end, _, _ = self._run(level, done, steer_fn=steering, slow_down=slow_down,
+                              timeout=timeout, what="Driving straight")
         self.steer(0.0, wait=False)
         return end
 
@@ -238,14 +242,19 @@ class Robot:
                 return True
             return False
 
-        end = self._run(backwards * abs(power or self.power), done, steer_fn=steering,
-                        slow_down=slow_down if slowdown_rad > 0 else None,
-                        straighten_at_stop=slowdown_rad > 0,
-                        timeout=timeout, what="Turning")
+        end, at_halt, at_rest = self._run(backwards * abs(power or self.power), done, steer_fn=steering,
+                                         slow_down=slow_down if slowdown_rad > 0 else None,
+                                         straighten_at_stop=slowdown_rad > 0,
+                                         timeout=timeout, what="Turning")
         settled_deg = math.degrees(end.heading - start.heading)
         if settled_tolerance_deg is not None and abs(settled_deg - angle_deg) > settled_tolerance_deg:
+            left = at_rest.left - at_halt.left
+            right = at_rest.right - at_halt.right
+            elapsed_ms = at_rest.ms - at_halt.ms
             raise MotionError(f"Turn settled at {settled_deg:+.1f}° with target {angle_deg:+g}°. "
-                              f"Encoders measured {cutoff_deg:+.1f}° at motor cutoff.")
+                              f"Estimated angle when halt was sent: {cutoff_deg:+.1f}°. "
+                              f"Encoder change after that sample: L {left:+d}, R {right:+d} "
+                              f"counts in {elapsed_ms:d} ms of board time.")
         return end
 
     def turn_around(self, angle_deg: float = 180.0, leg_m: float = 0.30,
@@ -283,8 +292,16 @@ class Robot:
         return self.pose, legs
 
     # ---- control loop -----------------------------------------------------------------
+    def _encoder_sample(self) -> Encoders:
+        enc = self.board.encoders
+        if self.board.reboots != self._encoder_epoch:
+            raise MotionError("The board restarted. Restart the script to reset odometry.")
+        if enc is None or time.monotonic() - enc.t > ENCODER_MAX_AGE_S:
+            raise MotionError("Encoder telemetry went stale. Check the control board's USB connection.")
+        return enc
+
     def _sync(self) -> Pose:
-        enc = self.board.wait_for("encoders")
+        enc = self._encoder_sample()
         return self.odometry.update(enc.left, enc.right)
 
     def _wheel_powers(self, power: float) -> tuple[float, float]:
@@ -297,23 +314,22 @@ class Robot:
              steer_fn: Optional[Callable[[Pose], float]] = None,
              slow_down: Optional[Callable[[Pose], float]] = None,
              straighten_at_stop: bool = False,
-             timeout: float = 30.0, what: str = "The motion") -> Pose:
+             timeout: float = 30.0, what: str = "The motion") -> tuple[Pose, Encoders, Encoders]:
         """Power the motors until done(pose) is true; always stops the motors at the end.
-        steer_fn(pose) gives the steering amount on every pass; slow_down(pose) scales the power."""
+        Return the settled pose and the encoder samples at the halt request and at rest."""
         board = self.board
-        reboots = board.reboots
-        pose = self._sync()
         started = last_move = time.monotonic()
-        last_counts = (board.encoders.left, board.encoders.right)
+        last_counts = None
         try:
-            while not done(pose):
+            while True:
+                enc = self._encoder_sample()
+                counts = (enc.left, enc.right)
+                pose = self.odometry.update(*counts)
+                if done(pose):
+                    break
                 now = time.monotonic()
-                if board.reboots != reboots:
-                    self.odometry.restart()
-                    raise MotionError("The board restarted during the motion (a power dip?).")
                 if now - started > timeout:
                     raise MotionError(f"{what} didn't finish within {timeout:.0f} s.")
-                counts = (board.encoders.left, board.encoders.right)
                 if counts != last_counts:
                     last_counts, last_move = counts, now
                 elif now - last_move > self.stall_s and now - started > self.ramp_s:
@@ -327,10 +343,29 @@ class Robot:
                     level *= slow_down(pose)
                 board.drive(*self._wheel_powers(level))
                 time.sleep(LOOP_S)
-                pose = self._sync()
         finally:
             board.halt()
         if straighten_at_stop:
             self.steer(0.0, wait=False)
-        time.sleep(STOP_SETTLE_S)
-        return self._sync()
+        return self._settle(enc)
+
+    def _settle(self, at_halt: Encoders) -> tuple[Pose, Encoders, Encoders]:
+        """Check fresh encoder samples while repeating halt in case a UART packet was lost."""
+        started = time.monotonic()
+        last_change_ms = at_halt.ms
+        last_counts = (at_halt.left, at_halt.right)
+        while True:
+            time.sleep(LOOP_S)
+            self.board.halt()
+            enc = self._encoder_sample()
+            now = time.monotonic()
+            counts = (enc.left, enc.right)
+            pose = self.odometry.update(*counts)
+            if counts != last_counts:
+                last_counts, last_change_ms = counts, enc.ms
+            if now - started >= STOP_SETTLE_S and enc.ms - last_change_ms >= STOP_QUIET_MS:
+                return pose, at_halt, enc
+            if now - started >= STOP_TIMEOUT_S:
+                raise MotionError("The wheels did not report a steady stop after repeated halt commands. "
+                                  f"Encoder change: L {enc.left - at_halt.left:+d}, "
+                                  f"R {enc.right - at_halt.right:+d} counts since the halt request.")
