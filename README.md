@@ -32,9 +32,10 @@ timed stop and `DEPTH_*` controls the camera inspection.
 
 The demo reduces motor power during the last `TURN_SLOWDOWN_DEG` degrees of each
 turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
-`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. If the settled turn
-misses its target, the error names the turn and shows the estimated heading when
-the Pi requested a halt, the settled heading, and the count change for each wheel.
+`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. A 90° right turn uses
+`TURN_RIGHT_90_STOP_LEAD_DEG`, tuned from the isolated turn test. If the settled
+turn misses its target, the error names the turn and shows the estimated heading
+when the Pi requested a halt, the settled heading, and the count change for each wheel.
 The Pi repeats the halt command while checking that fresh encoder readings settle.
 Run `6 --turn-test -90` in a clear area to check one right turn without the camera
 or obstacles. Compare the physical angle with the encoder estimate.

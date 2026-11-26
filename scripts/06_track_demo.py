@@ -43,7 +43,8 @@ DRIVE_POWER = None                    # None uses drive.power in config/robot.ya
 TURN_STEER = 1.0                      # fraction of full steering lock
 TURN_SLOWDOWN_DEG = 30.0               # start reducing motor power this far from the target
 TURN_FINISH_POWER_FRACTION = 0.45      # minimum fraction of drive power at the end of a turn
-TURN_STOP_LEAD_DEG = 4.0              # cut power a few degrees early to allow for coasting
+TURN_STOP_LEAD_DEG = 4.0              # default lead to allow for coasting
+TURN_RIGHT_90_STOP_LEAD_DEG = 7.0     # the 90° right turn rolled another 5.9° after the halt request
 MAX_TURN_DISTANCE_M = 1.4            # stop if an arc reaches this length early
 TURN_TOLERANCE_DEG = 5.0             # allowed encoder-estimated heading error
 MOTION_TIMEOUT_S = 20.0              # per leg or turn
@@ -94,11 +95,12 @@ def require_live_video(camera, timeout: float = 2.0) -> None:
 
 
 def drive_turn(robot: Robot, angle_deg: float, label: str) -> None:
+    stop_lead = TURN_RIGHT_90_STOP_LEAD_DEG if angle_deg == -90.0 else TURN_STOP_LEAD_DEG
     try:
         robot.turn_by(angle_deg, steer=TURN_STEER, power=DRIVE_POWER,
                       max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
                       slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
-                      stop_lead_deg=TURN_STOP_LEAD_DEG, settled_tolerance_deg=TURN_TOLERANCE_DEG)
+                      stop_lead_deg=stop_lead, settled_tolerance_deg=TURN_TOLERANCE_DEG)
     except MotionError as exc:
         raise MotionError(f"{label}. {exc}") from exc
 
@@ -167,6 +169,8 @@ def validate_settings() -> None:
         raise RuntimeError("Set TURN_FINISH_POWER_FRACTION in (0, 1]")
     if not 0 <= TURN_STOP_LEAD_DEG <= TURN_TOLERANCE_DEG:
         raise RuntimeError("Set TURN_STOP_LEAD_DEG between zero and TURN_TOLERANCE_DEG")
+    if not 0 <= TURN_RIGHT_90_STOP_LEAD_DEG <= 18.0:
+        raise RuntimeError("Set TURN_RIGHT_90_STOP_LEAD_DEG between zero and 18 degrees")
     left, top, right, bottom = DEPTH_ROI
     if (not 0 <= left < right <= 1 or not 0 <= top < bottom <= 1
             or round(right * 640) - round(left * 640) < 3
