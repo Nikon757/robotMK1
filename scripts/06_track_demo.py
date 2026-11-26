@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Drive the demonstration track and show a depth-detected obstacle in the live stream."""
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import time
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from modules.camera import CameraPan, MjpegServer
+from modules.engines import MotionError, Robot, load_config
+from modules.script_tools import run
+
+
+# ---- Settings to adjust at the track -----------------------------------------------
+# Straight legs are measured between the starts and ends of the steering arcs.
+# Turn angles are changes in heading. Positive is left and negative is right.
+# Distances are rehearsal values. Set them from the actual course before driving.
+BEFORE_PAUSE = (
+    ("drive", 0.50, "Approach the first obstacle"),
+    ("turn", -45.0, "Turn right to start the detour"),
+    ("drive", 0.60, "Follow the diagonal"),
+    ("turn", 45.0, "Return to the original heading"),
+    ("drive", 0.25, "Approach the corner past the obstacle"),
+    ("turn", 90.0, "Turn left past the obstacle"),
+    ("drive", 0.35, "Cross to the left edge of the course"),
+    ("turn", -90.0, "Turn right toward the top straight"),
+    ("drive", 0.25, "Reach the top corner"),
+    ("turn", -90.0, "Turn right onto the top straight"),
+    ("drive", 0.55, "Reach the timed stop"),
+)
+AFTER_PAUSE = (
+    ("drive", 0.55, "Continue along the top straight"),
+    ("turn", -90.0, "Turn right onto the final straight"),
+    ("drive", 0.55, "Reach the inspection stop"),
+)
+FINISH = (("drive", 0.80, "Continue to the finish line"),)
+PAUSE_S = 5.0                         # 5 to 10 seconds on the top straight
+DRIVE_POWER = None                    # None uses drive.power in config/robot.yaml
+TURN_STEER = 1.0                      # fraction of full steering lock
+MAX_TURN_DISTANCE_M = 1.4            # stop if an arc reaches this length early
+TURN_TOLERANCE_DEG = 5.0             # allowed encoder-estimated heading error
+MOTION_TIMEOUT_S = 20.0              # per leg or turn
+
+# Pan positions and stream settings come from config/robot.yaml.
+DEPTH_MIN_M = 0.35
+DEPTH_MAX_M = 1.20
+DEPTH_ROI = (0.18, 0.18, 0.82, 0.78)  # left, top, right, bottom as fractions of the image
+DEPTH_MIN_PIXELS = 600               # connected pixels in a 640 × 360 frame
+DEPTH_CONFIRM_FRAMES = 3
+DETECTION_TIMEOUT_S = 12.0
+CAMERA_START_TIMEOUT_S = 12.0
+
+
+# ---- Route execution --------------------------------------------------------------
+def describe_step(step):
+    action, value, label = step
+    if action == "drive":
+        return f"{label} ({value:g} m)"
+    side = "left" if value > 0 else "right"
+    return f"{label} ({abs(value):g}° {side})"
+
+
+def show_route() -> None:
+    for step in BEFORE_PAUSE:
+        print(" ", describe_step(step))
+    print(f"  Stop for {PAUSE_S:g} s")
+    for step in AFTER_PAUSE:
+        print(" ", describe_step(step))
+    print("  Stop, pan right, show the obstacle box, wait for Enter, and centre the camera")
+    for step in FINISH:
+        print(" ", describe_step(step))
+    print("  Stop at the finish")
+
+
+def wait_for_enter(prompt: str) -> None:
+    try:
+        input(prompt)
+    except EOFError as exc:
+        raise RuntimeError("The demonstration requires an interactive terminal") from exc
+
+
+def require_live_video(camera, timeout: float = 2.0) -> None:
+    last_id, _ = camera.wait_frame(timeout=0)
+    _, frame = camera.wait_frame(last_id, timeout=timeout)
+    if frame is None or not camera.running:
+        raise RuntimeError("No live picture from the OAK-D Lite. Check its USB connection.")
+
+
+def follow_route(robot: Robot, camera, steps) -> None:
+    for step in steps:
+        require_live_video(camera)
+        action, value, _ = step
+        print(describe_step(step), flush=True)
+        if action == "drive":
+            if value > 0:
+                robot.forward(value, power=DRIVE_POWER, timeout=MOTION_TIMEOUT_S)
+            continue
+
+        start_heading = robot.pose.heading
+        end = robot.turn_by(value, steer=TURN_STEER, power=DRIVE_POWER,
+                            max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S)
+        turned = math.degrees(end.heading - start_heading)
+        if abs(value - turned) > TURN_TOLERANCE_DEG:
+            raise MotionError(f"Turn estimated at {turned:+.1f}° with target {value:+g}°. "
+                              "Check turn clearance and odometry before retrying.")
+        robot.steer(0.0, wait=False)
+
+
+# ---- Stationary inspection --------------------------------------------------------
+def inspect_obstacle(camera, finish_prompt: str) -> None:
+    camera.inspect(True)
+    print("Looking for the obstacle in the depth image ...", flush=True)
+    obstacle = camera.wait_for_obstacle(DETECTION_TIMEOUT_S)
+    if obstacle is None:
+        require_live_video(camera)
+        raise RuntimeError(f"No obstacle found in {DETECTION_TIMEOUT_S:g} s. "
+                           "Check the target's placement and the DEPTH settings.")
+    print(f"Obstacle detected at {obstacle.distance_m:.2f} m. See the box in the stream.")
+    wait_for_enter(finish_prompt)
+    require_live_video(camera)
+    camera.inspect(False)
+
+
+def drive_demo(cfg, camera) -> None:
+    show_route()
+    wait_for_enter("Confirm the measured route is clear, then press Enter to start. Ctrl+C stops the run. ")
+    require_live_video(camera)
+    with Robot(config=cfg) as robot:
+        pan = CameraPan(robot.board, cfg)
+        follow_route(robot, camera, BEFORE_PAUSE)
+        robot.stop()
+        print(f"Stopped for {PAUSE_S:g} s ...", flush=True)
+        time.sleep(PAUSE_S)
+
+        follow_route(robot, camera, AFTER_PAUSE)
+        robot.stop()
+        print("Stopped for inspection. Camera turning right ...", flush=True)
+        pan.look_right()
+        inspect_obstacle(camera, "Press Enter to centre the camera and drive to the finish. ")
+        pan.look_center()
+        follow_route(robot, camera, FINISH)
+        robot.stop()
+        print("Finished. The robot is stopped.")
+
+
+# ---- Command line and setup -------------------------------------------------------
+def validate_settings() -> None:
+    for action, value, label in (*BEFORE_PAUSE, *AFTER_PAUSE, *FINISH):
+        if not math.isfinite(value) or not ((action == "drive" and value >= 0)
+                                            or (action == "turn" and 0 < abs(value) <= 180)):
+            raise RuntimeError(f"Invalid route setting for {label}: {action} {value}")
+    if not 0 < TURN_STEER <= 1 or not 5 <= PAUSE_S <= 10:
+        raise RuntimeError("Set TURN_STEER in (0, 1] and PAUSE_S from 5 to 10 seconds")
+    if DRIVE_POWER is not None and not 0 < DRIVE_POWER <= 1000:
+        raise RuntimeError("Set DRIVE_POWER between 1 and 1000, or use None for drive.power")
+    left, top, right, bottom = DEPTH_ROI
+    if (not 0 <= left < right <= 1 or not 0 <= top < bottom <= 1
+            or round(right * 640) - round(left * 640) < 3
+            or round(bottom * 360) - round(top * 360) < 3):
+        raise RuntimeError("Set DEPTH_ROI to a valid area at least 3 pixels wide and high")
+    if not 0 < DEPTH_MIN_M < DEPTH_MAX_M or DEPTH_MIN_PIXELS < 1 or DEPTH_CONFIRM_FRAMES < 1:
+        raise RuntimeError("Check the depth range, minimum area and confirmation frame count")
+    timing_and_limits = (MAX_TURN_DISTANCE_M, TURN_TOLERANCE_DEG, MOTION_TIMEOUT_S,
+                         DETECTION_TIMEOUT_S, CAMERA_START_TIMEOUT_S)
+    if any(not math.isfinite(value) or value <= 0 for value in timing_and_limits):
+        raise RuntimeError("Time, angle and distance limits must be positive and finite")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="print the course without opening hardware")
+    mode.add_argument("--camera-only", action="store_true",
+                      help="test the detector and stream with the robot stationary")
+    parser.add_argument("--port", type=int, help="HTTP port (default: camera_stream.port)")
+    args = parser.parse_args(argv)
+
+    def work() -> None:
+        validate_settings()
+        if args.dry_run:
+            show_route()
+            return
+
+        from modules.camera.depth_obstacle import OakObstacleCamera, ObstacleSettings
+
+        cfg = load_config()
+        stream = cfg["camera_stream"]
+        port = int(stream["port"]) if args.port is None else args.port
+        settings = ObstacleSettings(DEPTH_MIN_M, DEPTH_MAX_M, DEPTH_ROI,
+                                    DEPTH_MIN_PIXELS, DEPTH_CONFIRM_FRAMES)
+        with OakObstacleCamera(int(stream["fps"]), int(stream["jpeg_quality"]), settings) as camera:
+            try:
+                server = MjpegServer(camera, port).start()
+            except OSError as exc:
+                raise RuntimeError(f"Could not serve the camera on port {port} ({exc})") from exc
+            try:
+                require_live_video(camera, timeout=CAMERA_START_TIMEOUT_S)
+                print("Open the live stream in your browser")
+                for url in server.urls():
+                    print(" ", url)
+                if args.camera_only:
+                    wait_for_enter("Aim the camera at the target, then press Enter to start detection. ")
+                    inspect_obstacle(camera, "Press Enter to end the camera test. ")
+                else:
+                    drive_demo(cfg, camera)
+            finally:
+                server.stop()
+
+    return run(work)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
