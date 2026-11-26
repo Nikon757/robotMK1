@@ -44,6 +44,7 @@ TURN_STEER = 1.0                      # fraction of full steering lock
 TURN_SLOWDOWN_DEG = 30.0               # start reducing motor power this far from the target
 TURN_FINISH_POWER_FRACTION = 0.45      # minimum fraction of drive power at the end of a turn
 TURN_STOP_LEAD_DEG = 4.0              # default lead to allow for coasting
+TURN_GYRO_LEFT_90_STOP_LEAD_DEG = 10.0 # measured rollout after halt was 9.9°
 TURN_RIGHT_90_STOP_LEAD_DEG = 7.0     # 90° right turns in wheel-heading mode only
 MAX_TURN_DISTANCE_M = 1.4            # stop if an arc reaches this length early
 TURN_TOLERANCE_DEG = 5.0             # allowed settled heading error
@@ -98,14 +99,21 @@ def require_live_video(camera, timeout: float = 2.0) -> None:
 
 def drive_turn(robot: Robot, angle_deg: float, label: str) -> None:
     gyro_heading = robot.heading_delta is not None
-    stop_lead = TURN_RIGHT_90_STOP_LEAD_DEG if not gyro_heading and angle_deg == -90.0 else TURN_STOP_LEAD_DEG
+    stop_lead = TURN_STOP_LEAD_DEG
+    approach_lead = 0.0
+    if gyro_heading and angle_deg == 90.0:
+        stop_lead = TURN_GYRO_LEFT_90_STOP_LEAD_DEG
+        approach_lead = max(0.0, stop_lead - TURN_STOP_LEAD_DEG)
+    elif not gyro_heading and angle_deg == -90.0:
+        stop_lead = TURN_RIGHT_90_STOP_LEAD_DEG
     start_heading = robot.pose.heading
     start_enc = robot.board.encoders
     try:
         end = robot.turn_by(angle_deg, steer=TURN_STEER, power=DRIVE_POWER,
                             max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
                             slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
-                            stop_lead_deg=stop_lead, settled_tolerance_deg=TURN_TOLERANCE_DEG)
+                            stop_lead_deg=stop_lead, approach_lead_deg=approach_lead,
+                            settled_tolerance_deg=TURN_TOLERANCE_DEG)
     except RuntimeError as exc:
         raise MotionError(f"{label}. {exc}") from exc
     turned = math.degrees(end.heading - start_heading)
@@ -203,6 +211,8 @@ def validate_settings() -> None:
         raise RuntimeError("Set TURN_FINISH_POWER_FRACTION in (0, 1]")
     if not 0 <= TURN_STOP_LEAD_DEG <= TURN_TOLERANCE_DEG:
         raise RuntimeError("Set TURN_STOP_LEAD_DEG between zero and TURN_TOLERANCE_DEG")
+    if not 0 <= TURN_GYRO_LEFT_90_STOP_LEAD_DEG <= 18.0:
+        raise RuntimeError("Set TURN_GYRO_LEFT_90_STOP_LEAD_DEG between zero and 18 degrees")
     if not 0 <= TURN_RIGHT_90_STOP_LEAD_DEG <= 18.0:
         raise RuntimeError("Set TURN_RIGHT_90_STOP_LEAD_DEG between zero and 18 degrees")
     left, top, right, bottom = DEPTH_ROI

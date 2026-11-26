@@ -186,6 +186,7 @@ class Robot:
                 timeout: float = 30.0, *, slowdown_deg: float = 0.0,
                 finish_power_fraction: float = 0.45,
                 stop_lead_deg: Optional[float] = None,
+                approach_lead_deg: float = 0.0,
                 settled_tolerance_deg: Optional[float] = None) -> Pose:
         """Drive an arc until the heading has changed by angle_deg (+ = left).
 
@@ -195,11 +196,13 @@ class Robot:
         slowdown_deg: reduce power toward finish_power_fraction over the final degrees,
         then straighten at motor cutoff while the wheels can still roll.
         stop_lead_deg: cut power this far before the target to allow for coasting.
+        approach_lead_deg: shift steering taper and power reduction earlier by this many degrees.
         settled_tolerance_deg: raise MotionError if the settled heading misses the target."""
         start = replace(self._sync(reset_heading=True))
         turn = 1 if angle_deg >= 0 else -1
         backwards = -1 if reverse else 1
         goal = math.radians(abs(angle_deg))
+        approach_target = max(0.0, goal - math.radians(approach_lead_deg))
         slowdown_rad = math.radians(slowdown_deg)
         cutoff = goal - math.radians(FINISH_TOL_DEG)
         if stop_lead_deg is not None:
@@ -212,14 +215,14 @@ class Robot:
             """Full steer until TAPER_DEG before the target, then less and less: the wheels
             straighten while the robot still rolls, like a car leaving a bend. Stationary
             tyres grip the floor too hard for the servo to straighten them fully."""
-            remaining = goal - (pose.heading - start.heading) * turn
+            remaining = approach_target - (pose.heading - start.heading) * turn
             amount = min(abs(steer), max(0.0, remaining) / math.radians(TAPER_DEG))
             return turn * backwards * amount
 
         self.steer(steering(start))
 
         def slow_down(pose: Pose) -> float:
-            remaining = goal - (pose.heading - start.heading) * turn
+            remaining = approach_target - (pose.heading - start.heading) * turn
             fraction = max(0.0, min(1.0, remaining / slowdown_rad))
             return finish_power_fraction + (1.0 - finish_power_fraction) * fraction
 

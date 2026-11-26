@@ -38,8 +38,10 @@ encoder heading. [OAK-D Lite IMU specifications](https://docs.luxonis.com/hardwa
 
 The demo reduces motor power during the last `TURN_SLOWDOWN_DEG` degrees of each
 turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
-`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. In wheel-heading mode,
-a 90° right turn uses `TURN_RIGHT_90_STOP_LEAD_DEG`. If the settled turn misses its
+`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. A 90° left turn with the gyro
+uses `TURN_GYRO_LEFT_90_STOP_LEAD_DEG` based on the measured 9.9° of rollout. The
+steering and motor power taper earlier by the same change in lead. In wheel-heading
+mode, a 90° right turn uses `TURN_RIGHT_90_STOP_LEAD_DEG`. If the settled turn misses its
 target, the error shows the heading when the Pi requested a halt, the settled
 heading, and the count change for each wheel. The Pi repeats the halt command
 while checking that the readings settle.
