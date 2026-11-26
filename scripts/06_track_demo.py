@@ -44,10 +44,12 @@ TURN_STEER = 1.0                      # fraction of full steering lock
 TURN_SLOWDOWN_DEG = 30.0               # start reducing motor power this far from the target
 TURN_FINISH_POWER_FRACTION = 0.45      # minimum fraction of drive power at the end of a turn
 TURN_STOP_LEAD_DEG = 4.0              # default lead to allow for coasting
-TURN_RIGHT_90_STOP_LEAD_DEG = 7.0     # the 90° right turn rolled another 5.9° after the halt request
+TURN_RIGHT_90_STOP_LEAD_DEG = 7.0     # 90° right turns in wheel-heading mode only
 MAX_TURN_DISTANCE_M = 1.4            # stop if an arc reaches this length early
-TURN_TOLERANCE_DEG = 5.0             # allowed encoder-estimated heading error
+TURN_TOLERANCE_DEG = 5.0             # allowed settled heading error
 MOTION_TIMEOUT_S = 20.0              # per leg or turn
+IMU_RATE_HZ = 100
+IMU_CALIBRATION_S = 1.0
 
 # Pan positions and stream settings come from config/robot.yaml.
 DEPTH_MIN_M = 0.35
@@ -95,14 +97,25 @@ def require_live_video(camera, timeout: float = 2.0) -> None:
 
 
 def drive_turn(robot: Robot, angle_deg: float, label: str) -> None:
-    stop_lead = TURN_RIGHT_90_STOP_LEAD_DEG if angle_deg == -90.0 else TURN_STOP_LEAD_DEG
+    gyro_heading = robot.heading_delta is not None
+    stop_lead = TURN_RIGHT_90_STOP_LEAD_DEG if not gyro_heading and angle_deg == -90.0 else TURN_STOP_LEAD_DEG
+    start_heading = robot.pose.heading
+    start_enc = robot.board.encoders
     try:
-        robot.turn_by(angle_deg, steer=TURN_STEER, power=DRIVE_POWER,
-                      max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
-                      slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
-                      stop_lead_deg=stop_lead, settled_tolerance_deg=TURN_TOLERANCE_DEG)
-    except MotionError as exc:
+        end = robot.turn_by(angle_deg, steer=TURN_STEER, power=DRIVE_POWER,
+                            max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
+                            slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
+                            stop_lead_deg=stop_lead, settled_tolerance_deg=TURN_TOLERANCE_DEG)
+    except RuntimeError as exc:
         raise MotionError(f"{label}. {exc}") from exc
+    turned = math.degrees(end.heading - start_heading)
+    if gyro_heading and start_enc is not None:
+        enc = robot.board.encoders
+        count_diff = (enc.right - start_enc.right) - (enc.left - start_enc.left)
+        wheel_turn = math.degrees(count_diff / (robot.odometry.counts_per_metre * robot.odometry.track_m))
+        print(f"Turned {turned:+.1f}° by gyro, {wheel_turn:+.1f}° by wheel encoders.", flush=True)
+    else:
+        print(f"Turned {turned:+.1f}° by wheel encoders.", flush=True)
 
 
 def follow_route(robot: Robot, camera, steps) -> None:
@@ -133,12 +146,20 @@ def inspect_obstacle(camera, finish_prompt: str) -> None:
     camera.inspect(False)
 
 
+def calibrate_gyro(yaw) -> None:
+    print("Calibrating the OAK gyro. Keep the robot still on level ground.", flush=True)
+    yaw.calibrate(IMU_CALIBRATION_S)
+
+
 def drive_demo(cfg, camera) -> None:
     show_route()
     wait_for_enter("Confirm the measured route is clear, then press Enter to start. Ctrl+C stops the run. ")
     require_live_video(camera)
-    with Robot(config=cfg) as robot:
+    yaw = camera.yaw
+    with Robot(config=cfg, heading_delta=yaw.delta if yaw else None) as robot:
         pan = CameraPan(robot.board, cfg)
+        if yaw is not None:
+            calibrate_gyro(yaw)
         follow_route(robot, camera, BEFORE_PAUSE)
         robot.stop()
         print(f"Stopped for {PAUSE_S:g} s ...", flush=True)
@@ -150,9 +171,22 @@ def drive_demo(cfg, camera) -> None:
         pan.look_right()
         inspect_obstacle(camera, "Press Enter to centre the camera and drive to the finish. ")
         pan.look_center()
+        if yaw is not None:
+            calibrate_gyro(yaw)
         follow_route(robot, camera, FINISH)
         robot.stop()
         print("Finished. The robot is stopped.")
+
+
+def test_turn(cfg, angle: float, yaw=None) -> None:
+    print(f"Single {angle:+g}° test turn. Leave room for the arc and for the robot to roll to a stop.")
+    wait_for_enter("Press Enter once the test area is clear. Ctrl+C stops the run. ")
+    with Robot(config=cfg, heading_delta=yaw.delta if yaw else None) as robot:
+        if yaw is not None:
+            CameraPan(robot.board, cfg)
+            calibrate_gyro(yaw)
+        drive_turn(robot, angle, "Test turn")
+        print("The robot is stopped.")
 
 
 # ---- Command line and setup -------------------------------------------------------
@@ -179,7 +213,7 @@ def validate_settings() -> None:
     if not 0 < DEPTH_MIN_M < DEPTH_MAX_M or DEPTH_MIN_PIXELS < 1 or DEPTH_CONFIRM_FRAMES < 1:
         raise RuntimeError("Check the depth range, minimum area and confirmation frame count")
     timing_and_limits = (TURN_SLOWDOWN_DEG, MAX_TURN_DISTANCE_M, TURN_TOLERANCE_DEG, MOTION_TIMEOUT_S,
-                         DETECTION_TIMEOUT_S, CAMERA_START_TIMEOUT_S)
+                         DETECTION_TIMEOUT_S, CAMERA_START_TIMEOUT_S, IMU_CALIBRATION_S)
     if any(not math.isfinite(value) or value <= 0 for value in timing_and_limits):
         raise RuntimeError("Time, angle and distance limits must be positive and finite")
 
@@ -191,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--camera-only", action="store_true",
                       help="test the detector and stream with the robot stationary")
     mode.add_argument("--turn-test", type=float, metavar="DEG",
-                      help="drive a single test arc without the camera (negative = right)")
+                      help="drive a single test arc without video streaming (negative = right)")
+    parser.add_argument("--heading", choices=("gyro", "wheels"), default="gyro",
+                        help="heading feedback for driving (default: OAK gyro)")
     parser.add_argument("--port", type=int, help="HTTP port (default: camera_stream.port)")
     args = parser.parse_args(argv)
 
@@ -200,25 +236,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             show_route()
             return
-        if args.turn_test is not None:
-            angle = args.turn_test
-            if not 0 < abs(angle) <= 180:
-                raise RuntimeError("Set the test angle between -180° and +180° and away from zero")
-            print(f"Single {angle:+g}° test turn. Allow room for up to {MAX_TURN_DISTANCE_M:g} m of travel.")
-            wait_for_enter("Press Enter once the test area is clear. Ctrl+C stops the run. ")
-            with Robot() as robot:
-                drive_turn(robot, angle, "Test turn")
-                print(f"Test turn settled at {math.degrees(robot.pose.heading):+.1f}°. The robot is stopped.")
+        angle = args.turn_test
+        if angle is not None and not 0 < abs(angle) <= 180:
+            raise RuntimeError("Set the test angle between -180° and +180° and away from zero")
+        cfg = load_config()
+        if angle is not None and args.heading == "wheels":
+            test_turn(cfg, angle)
             return
 
         from modules.camera.depth_obstacle import OakObstacleCamera, ObstacleSettings
 
-        cfg = load_config()
         stream = cfg["camera_stream"]
         port = int(stream["port"]) if args.port is None else args.port
         settings = ObstacleSettings(DEPTH_MIN_M, DEPTH_MAX_M, DEPTH_ROI,
                                     DEPTH_MIN_PIXELS, DEPTH_CONFIRM_FRAMES)
-        with OakObstacleCamera(int(stream["fps"]), int(stream["jpeg_quality"]), settings) as camera:
+        use_gyro = args.heading == "gyro" and not args.camera_only
+        with OakObstacleCamera(int(stream["fps"]), int(stream["jpeg_quality"]), settings,
+                               imu_rate_hz=IMU_RATE_HZ if use_gyro else None) as camera:
+            if angle is not None:
+                test_turn(cfg, angle, camera.yaw)
+                return
             try:
                 server = MjpegServer(camera, port).start()
             except OSError as exc:

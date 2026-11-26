@@ -27,25 +27,33 @@ Set the straight-leg distances at the top of [script 06](scripts/06_track_demo.p
 from the physical course. Measure each straight leg between the steering arcs
 and allow room for the robot to sweep through each turn. The supplied distances
 are starting values for rehearsal. Use the encoder distance and turn calibrations
-from script 00 to improve endpoint and heading accuracy. `PAUSE_S` controls the
-timed stop and `DEPTH_*` controls the camera inspection.
+from script 00 for distance and for heading when using wheel counts.
+`PAUSE_S` controls the timed stop and `DEPTH_*` controls the camera inspection.
+
+The demo uses the OAK-D Lite gyro for heading and the rear encoders for distance.
+Keep the robot stationary and level while the camera gyro calibrates. Calibration
+runs with the camera centred before departure and after the inspection. Lost gyro
+samples stop the run. If your camera has no IMU, select `6 --heading wheels` to use
+encoder heading. [OAK-D Lite IMU specifications](https://docs.luxonis.com/hardware/products/OAK-D%20Lite)
 
 The demo reduces motor power during the last `TURN_SLOWDOWN_DEG` degrees of each
 turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
-`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. A 90° right turn uses
-`TURN_RIGHT_90_STOP_LEAD_DEG`, tuned from the isolated turn test. If the settled
-turn misses its target, the error names the turn and shows the estimated heading
-when the Pi requested a halt, the settled heading, and the count change for each wheel.
-The Pi repeats the halt command while checking that fresh encoder readings settle.
-Run `6 --turn-test -90` in a clear area to check one right turn without the camera
-or obstacles. Compare the physical angle with the encoder estimate.
+`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. In wheel-heading mode,
+a 90° right turn uses `TURN_RIGHT_90_STOP_LEAD_DEG`. If the settled turn misses its
+target, the error shows the heading when the Pi requested a halt, the settled
+heading, and the count change for each wheel. The Pi repeats the halt command
+while checking that the readings settle.
+
+Run `6 --turn-test 90` in a clear area to test the left turn by itself and compare
+the gyro and wheel estimates with the physical angle. Add `--heading wheels` to
+run the same test using the board alone. Negative angles turn right.
 
 At the second stop, the camera pans right. The detector marks the largest connected
 patch of in-range stereo depth inside the inspection area and shows its median
 distance. Place the target inside the configured distance band and keep nearby
 background surfaces outside that band. If the detector times out, the run stops.
 Once a box appears, press Enter in the terminal to recenter the camera and drive
-the final measured leg. The route uses encoder odometry for the bypass and finish.
+the final measured leg. The bypass and finish use the configured route distances.
 RGB and depth are paired on the camera before the Pi draws the overlay.
 [Luxonis DepthAI v2 alignment example](https://github.com/luxonis/depthai-python/blob/v2.33.0.0/examples/StereoDepth/rgb_depth_aligned.py)
 

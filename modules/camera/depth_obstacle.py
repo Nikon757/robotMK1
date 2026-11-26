@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from .stream import OakMjpegCamera
+from .yaw import OakYaw
 
 
 @dataclass(frozen=True)
@@ -53,9 +54,11 @@ class OakObstacleCamera(OakMjpegCamera):
 
     _stream_name = "rgbd"
 
-    def __init__(self, fps: int, quality: int, settings: ObstacleSettings):
+    def __init__(self, fps: int, quality: int, settings: ObstacleSettings, *, imu_rate_hz: int | None = None):
         super().__init__(fps, quality)
         self.settings = settings
+        self.imu_rate_hz = imu_rate_hz
+        self.yaw: OakYaw | None = None
         self._inspecting = False
         self._detection: Obstacle | None = None
         self._hits = 0
@@ -78,7 +81,15 @@ class OakObstacleCamera(OakMjpegCamera):
         try:
             calibration = device.readCalibration2()
             lens_position = calibration.getLensPosition(dai.CameraBoardSocket.CAM_A)
-            device.startPipeline(self._build_pipeline(dai, lens_position))
+            pipeline = self._build_pipeline(dai, lens_position)
+            if self.imu_rate_hz is not None:
+                imu_type = device.getConnectedIMU()
+                if not imu_type or imu_type.upper() in ("NONE", "UNKNOWN"):
+                    raise RuntimeError("This OAK reports no IMU. Use --heading wheels to select encoder heading.")
+                OakYaw.add_to_pipeline(dai, pipeline, self.imu_rate_hz)
+            device.startPipeline(pipeline)
+            if self.imu_rate_hz is not None:
+                self.yaw = OakYaw(dai, device)
         except BaseException:
             device.close()
             raise

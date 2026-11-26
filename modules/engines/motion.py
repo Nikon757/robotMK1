@@ -61,12 +61,12 @@ class Odometry:
         self.pose = Pose()
         self._last: Optional[tuple[int, int]] = None
 
-    def update(self, left: int, right: int) -> Pose:
+    def update(self, left: int, right: int, heading_delta: Optional[float] = None) -> Pose:
         if self._last is not None:
             d_left = (left - self._last[0]) / self.counts_per_metre
             d_right = (right - self._last[1]) / self.counts_per_metre
             ds = (d_left + d_right) / 2
-            d_heading = (d_right - d_left) / self.track_m
+            d_heading = (d_right - d_left) / self.track_m if heading_delta is None else heading_delta
             mid = self.pose.heading + d_heading / 2
             self.pose.x += ds * math.cos(mid)
             self.pose.y += ds * math.sin(mid)
@@ -83,7 +83,9 @@ class Odometry:
 class Robot:
     """Drive motors, steering and encoders. Values come from config/robot.yaml."""
 
-    def __init__(self, board: Optional[NiumoBoard] = None, config: Optional[dict] = None):
+    def __init__(self, board: Optional[NiumoBoard] = None, config: Optional[dict] = None, *,
+                 heading_delta: Optional[Callable[[bool], float]] = None):
+        """Optional heading callback returns radians since its last read. True resets its baseline."""
         self.cfg = config or load_config()
         chassis, steering, drive = self.cfg["chassis"], self.cfg["steering"], self.cfg["drive"]
         if not chassis.get("counts_per_metre"):
@@ -104,9 +106,11 @@ class Robot:
         # wide tyres and side-slip make it smaller than the measured tyre-centre distance.
         odometry_track = float(chassis.get("odometry_track_m") or self.track)
         self.odometry = Odometry(float(chassis["counts_per_metre"]), odometry_track)
+        self.heading_delta = heading_delta
         self._encoder_epoch = self.board.reboots
         self._steer_amount: Optional[float] = None
-        self._sync()
+        enc = self._encoder_sample()
+        self.odometry.update(enc.left, enc.right)
         self.steer(0.0)
 
     # ---- basics -----------------------------------------------------------------------
@@ -148,7 +152,7 @@ class Robot:
     def forward(self, distance_m: float, power: Optional[int] = None, timeout: float = 30.0) -> Pose:
         """Drive straight for distance_m metres (negative = backwards), holding the heading
         the robot had at the start."""
-        start = replace(self._sync())
+        start = replace(self._sync(reset_heading=True))
         goal = abs(distance_m)
         level = (1 if distance_m >= 0 else -1) * abs(power or self.power)
         self.steer(0.0)
@@ -192,7 +196,7 @@ class Robot:
         then straighten at motor cutoff while the wheels can still roll.
         stop_lead_deg: cut power this far before the target to allow for coasting.
         settled_tolerance_deg: raise MotionError if the settled heading misses the target."""
-        start = replace(self._sync())
+        start = replace(self._sync(reset_heading=True))
         turn = 1 if angle_deg >= 0 else -1
         backwards = -1 if reverse else 1
         goal = math.radians(abs(angle_deg))
@@ -251,7 +255,8 @@ class Robot:
             left = at_rest.left - at_halt.left
             right = at_rest.right - at_halt.right
             elapsed_ms = at_rest.ms - at_halt.ms
-            raise MotionError(f"Turn settled at {settled_deg:+.1f}° with target {angle_deg:+g}°. "
+            source = "Gyro" if self.heading_delta is not None else "Encoder"
+            raise MotionError(f"{source} heading settled at {settled_deg:+.1f}° with target {angle_deg:+g}°. "
                               f"Estimated angle when halt was sent: {cutoff_deg:+.1f}°. "
                               f"Encoder change after that sample: L {left:+d}, R {right:+d} "
                               f"counts in {elapsed_ms:d} ms of board time.")
@@ -264,7 +269,7 @@ class Robot:
         backward arcs steered the other way, each at most leg_m long, until the heading has
         changed by angle_deg (+ = left). Returns the final pose and the number of legs.
         on_leg(leg number, "forward"/"backward", degrees turned so far) is called after each leg."""
-        start = replace(self._sync())
+        start = replace(self._sync(reset_heading=True))
         turn = 1 if angle_deg >= 0 else -1
         goal = math.radians(abs(angle_deg))
         legs = 0
@@ -300,9 +305,12 @@ class Robot:
             raise MotionError("Encoder telemetry went stale. Check the control board's USB connection.")
         return enc
 
-    def _sync(self) -> Pose:
-        enc = self._encoder_sample()
-        return self.odometry.update(enc.left, enc.right)
+    def _update(self, enc: Encoders, reset_heading: bool = False) -> Pose:
+        delta = None if self.heading_delta is None else self.heading_delta(reset_heading)
+        return self.odometry.update(enc.left, enc.right, delta)
+
+    def _sync(self, reset_heading: bool = False) -> Pose:
+        return self._update(self._encoder_sample(), reset_heading)
 
     def _wheel_powers(self, power: float) -> tuple[float, float]:
         """Share the power between the rear wheels the way their speeds differ in a turn:
@@ -324,7 +332,7 @@ class Robot:
             while True:
                 enc = self._encoder_sample()
                 counts = (enc.left, enc.right)
-                pose = self.odometry.update(*counts)
+                pose = self._update(enc)
                 if done(pose):
                     break
                 now = time.monotonic()
@@ -354,15 +362,18 @@ class Robot:
         started = time.monotonic()
         last_change_ms = at_halt.ms
         last_counts = (at_halt.left, at_halt.right)
+        last_heading = self.pose.heading
         while True:
             time.sleep(LOOP_S)
             self.board.halt()
             enc = self._encoder_sample()
             now = time.monotonic()
             counts = (enc.left, enc.right)
-            pose = self.odometry.update(*counts)
-            if counts != last_counts:
+            pose = self._update(enc)
+            rotating = abs(pose.heading - last_heading) > math.radians(0.75)
+            if counts != last_counts or rotating:
                 last_counts, last_change_ms = counts, enc.ms
+                last_heading = pose.heading
             if now - started >= STOP_SETTLE_S and enc.ms - last_change_ms >= STOP_QUIET_MS:
                 return pose, at_halt, enc
             if now - started >= STOP_TIMEOUT_S:
