@@ -30,6 +30,12 @@ are starting values for rehearsal. Use the encoder distance and turn calibration
 from script 00 to improve endpoint and heading accuracy. `PAUSE_S` controls the
 timed stop and `DEPTH_*` controls the camera inspection.
 
+The demo reduces motor power during the last `TURN_SLOWDOWN_DEG` degrees of each
+turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
+`TURN_STOP_LEAD_DEG` allows a few degrees for coasting. If the settled turn
+misses its target, the error shows the encoder estimates at motor cutoff and
+after settling. A large difference indicates continued rotation after cutoff.
+
 At the second stop, the camera pans right. The detector marks the largest connected
 patch of in-range stereo depth inside the inspection area and shows its median
 distance. Place the target inside the configured distance band and keep nearby

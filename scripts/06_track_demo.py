@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from modules.camera import CameraPan, MjpegServer
-from modules.engines import MotionError, Robot, load_config
+from modules.engines import Robot, load_config
 from modules.script_tools import run
 
 
@@ -41,6 +41,9 @@ FINISH = (("drive", 0.80, "Continue to the finish line"),)
 PAUSE_S = 5.0                         # 5 to 10 seconds on the top straight
 DRIVE_POWER = None                    # None uses drive.power in config/robot.yaml
 TURN_STEER = 1.0                      # fraction of full steering lock
+TURN_SLOWDOWN_DEG = 30.0               # start reducing motor power this far from the target
+TURN_FINISH_POWER_FRACTION = 0.45      # minimum fraction of drive power at the end of a turn
+TURN_STOP_LEAD_DEG = 4.0              # cut power a few degrees early to allow for coasting
 MAX_TURN_DISTANCE_M = 1.4            # stop if an arc reaches this length early
 TURN_TOLERANCE_DEG = 5.0             # allowed encoder-estimated heading error
 MOTION_TIMEOUT_S = 20.0              # per leg or turn
@@ -100,14 +103,10 @@ def follow_route(robot: Robot, camera, steps) -> None:
                 robot.forward(value, power=DRIVE_POWER, timeout=MOTION_TIMEOUT_S)
             continue
 
-        start_heading = robot.pose.heading
-        end = robot.turn_by(value, steer=TURN_STEER, power=DRIVE_POWER,
-                            max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S)
-        turned = math.degrees(end.heading - start_heading)
-        if abs(value - turned) > TURN_TOLERANCE_DEG:
-            raise MotionError(f"Turn estimated at {turned:+.1f}° with target {value:+g}°. "
-                              "Check turn clearance and odometry before retrying.")
-        robot.steer(0.0, wait=False)
+        robot.turn_by(value, steer=TURN_STEER, power=DRIVE_POWER,
+                      max_distance_m=MAX_TURN_DISTANCE_M, timeout=MOTION_TIMEOUT_S,
+                      slowdown_deg=TURN_SLOWDOWN_DEG, finish_power_fraction=TURN_FINISH_POWER_FRACTION,
+                      stop_lead_deg=TURN_STOP_LEAD_DEG, settled_tolerance_deg=TURN_TOLERANCE_DEG)
 
 
 # ---- Stationary inspection --------------------------------------------------------
@@ -157,6 +156,10 @@ def validate_settings() -> None:
         raise RuntimeError("Set TURN_STEER in (0, 1] and PAUSE_S from 5 to 10 seconds")
     if DRIVE_POWER is not None and not 0 < DRIVE_POWER <= 1000:
         raise RuntimeError("Set DRIVE_POWER between 1 and 1000, or use None for drive.power")
+    if not 0 < TURN_FINISH_POWER_FRACTION <= 1:
+        raise RuntimeError("Set TURN_FINISH_POWER_FRACTION in (0, 1]")
+    if not 0 <= TURN_STOP_LEAD_DEG <= TURN_TOLERANCE_DEG:
+        raise RuntimeError("Set TURN_STOP_LEAD_DEG between zero and TURN_TOLERANCE_DEG")
     left, top, right, bottom = DEPTH_ROI
     if (not 0 <= left < right <= 1 or not 0 <= top < bottom <= 1
             or round(right * 640) - round(left * 640) < 3
@@ -164,7 +167,7 @@ def validate_settings() -> None:
         raise RuntimeError("Set DEPTH_ROI to a valid area at least 3 pixels wide and high")
     if not 0 < DEPTH_MIN_M < DEPTH_MAX_M or DEPTH_MIN_PIXELS < 1 or DEPTH_CONFIRM_FRAMES < 1:
         raise RuntimeError("Check the depth range, minimum area and confirmation frame count")
-    timing_and_limits = (MAX_TURN_DISTANCE_M, TURN_TOLERANCE_DEG, MOTION_TIMEOUT_S,
+    timing_and_limits = (TURN_SLOWDOWN_DEG, MAX_TURN_DISTANCE_M, TURN_TOLERANCE_DEG, MOTION_TIMEOUT_S,
                          DETECTION_TIMEOUT_S, CAMERA_START_TIMEOUT_S)
     if any(not math.isfinite(value) or value <= 0 for value in timing_and_limits):
         raise RuntimeError("Time, angle and distance limits must be positive and finite")

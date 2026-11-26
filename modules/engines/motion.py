@@ -175,18 +175,30 @@ class Robot:
 
     def turn_by(self, angle_deg: float, steer: float = 1.0, power: Optional[int] = None,
                 reverse: bool = False, max_distance_m: Optional[float] = None,
-                timeout: float = 30.0) -> Pose:
+                timeout: float = 30.0, *, slowdown_deg: float = 0.0,
+                finish_power_fraction: float = 0.45,
+                stop_lead_deg: Optional[float] = None,
+                settled_tolerance_deg: Optional[float] = None) -> Pose:
         """Drive an arc until the heading has changed by angle_deg (+ = left).
 
         steer: how hard to steer, 0..1 of full lock. reverse: drive backwards; the steering
         is then turned the other way, so the robot still turns towards angle_deg.
-        max_distance_m: stop after this distance even if the angle isn't reached yet."""
+        max_distance_m: stop after this distance even if the angle isn't reached yet.
+        slowdown_deg: reduce power toward finish_power_fraction over the final degrees,
+        then straighten at motor cutoff while the wheels can still roll.
+        stop_lead_deg: cut power this far before the target to allow for coasting.
+        settled_tolerance_deg: raise MotionError if the settled heading misses the target."""
         start = replace(self._sync())
         turn = 1 if angle_deg >= 0 else -1
         backwards = -1 if reverse else 1
         goal = math.radians(abs(angle_deg))
+        slowdown_rad = math.radians(slowdown_deg)
+        cutoff = goal - math.radians(FINISH_TOL_DEG)
+        if stop_lead_deg is not None:
+            cutoff = max(goal * 0.8, goal - math.radians(stop_lead_deg))
         check_from: Optional[float] = None
         checked = False
+        cutoff_deg = 0.0
 
         def steering(pose: Pose) -> float:
             """Full steer until TAPER_DEG before the target, then less and less: the wheels
@@ -198,8 +210,13 @@ class Robot:
 
         self.steer(steering(start))
 
+        def slow_down(pose: Pose) -> float:
+            remaining = goal - (pose.heading - start.heading) * turn
+            fraction = max(0.0, min(1.0, remaining / slowdown_rad))
+            return finish_power_fraction + (1.0 - finish_power_fraction) * fraction
+
         def done(pose: Pose) -> bool:
-            nonlocal check_from, checked
+            nonlocal check_from, checked, cutoff_deg
             turned = (pose.heading - start.heading) * turn
             travelled = abs(pose.distance - start.distance)
             # Judge the direction only once the wheels have rolled a little: standing tyres
@@ -215,12 +232,21 @@ class Robot:
                     raise SteeringDirectionError("The robot isn't turning: is the steering servo "
                                                  "plugged into PB14 and the battery on?")
                 checked = True
-            if max_distance_m is not None and travelled >= max_distance_m:
+            distance_limit = max_distance_m is not None and travelled >= max_distance_m
+            if distance_limit or turned >= cutoff:
+                cutoff_deg = math.degrees(pose.heading - start.heading)
                 return True
-            return turned >= goal - math.radians(FINISH_TOL_DEG)
+            return False
 
-        return self._run(backwards * abs(power or self.power), done, steer_fn=steering,
-                         timeout=timeout, what="Turning")
+        end = self._run(backwards * abs(power or self.power), done, steer_fn=steering,
+                        slow_down=slow_down if slowdown_rad > 0 else None,
+                        straighten_at_stop=slowdown_rad > 0,
+                        timeout=timeout, what="Turning")
+        settled_deg = math.degrees(end.heading - start.heading)
+        if settled_tolerance_deg is not None and abs(settled_deg - angle_deg) > settled_tolerance_deg:
+            raise MotionError(f"Turn settled at {settled_deg:+.1f}° with target {angle_deg:+g}°. "
+                              f"Encoders measured {cutoff_deg:+.1f}° at motor cutoff.")
+        return end
 
     def turn_around(self, angle_deg: float = 180.0, leg_m: float = 0.30,
                     power: Optional[int] = None, max_legs: int = 12,
@@ -270,6 +296,7 @@ class Robot:
     def _run(self, power: float, done: Callable[[Pose], bool], *,
              steer_fn: Optional[Callable[[Pose], float]] = None,
              slow_down: Optional[Callable[[Pose], float]] = None,
+             straighten_at_stop: bool = False,
              timeout: float = 30.0, what: str = "The motion") -> Pose:
         """Power the motors until done(pose) is true; always stops the motors at the end.
         steer_fn(pose) gives the steering amount on every pass; slow_down(pose) scales the power."""
@@ -303,5 +330,7 @@ class Robot:
                 pose = self._sync()
         finally:
             board.halt()
+        if straighten_at_stop:
+            self.steer(0.0, wait=False)
         time.sleep(STOP_SETTLE_S)
         return self._sync()
