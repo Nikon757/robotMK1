@@ -28,7 +28,7 @@ GYRO_TURN_MAX_GAP_S = 0.08  # stop if the Pi cannot keep up with gyro turn check
 STEER_SETTLE_S = 0.3        # time for the steering servo to move by a full lock (0 -> 1)
 STOP_SETTLE_S = 0.4         # minimum time to observe the wheels after the halt command
 STOP_QUIET_MS = 150         # both encoder counts must stay still for this much board time
-STOP_TIMEOUT_S = 1.0       # maximum time to wait for a confirmed stop
+STOP_TIMEOUT_S = 1.5       # maximum time to wait for a confirmed stop
 ENCODER_MAX_AGE_S = 0.15   # firmware sends encoder counts every 20 ms
 HEADING_GAIN = 2.0          # straight driving: steering amount per radian of heading error
 MAX_DRIFT_DEG = 20.0        # straight driving: give up beyond this heading error
@@ -400,9 +400,11 @@ class Robot:
             if counts != last_counts or rotating:
                 last_counts, last_change_ms = counts, enc.ms
                 last_heading = pose.heading
-            if now - started >= STOP_SETTLE_S and enc.ms - last_change_ms >= STOP_QUIET_MS:
+            quiet_ms = enc.ms - last_change_ms
+            if now - started >= STOP_SETTLE_S and quiet_ms >= STOP_QUIET_MS:
                 return pose, at_halt, enc
             if now - started >= STOP_TIMEOUT_S:
-                raise MotionError("The wheels did not report a steady stop after repeated halt commands. "
+                raise MotionError(f"Stop not confirmed after {now - started:.2f} s of repeated halt commands. "
+                                  f"Readings were steady for {quiet_ms} ms of the required {STOP_QUIET_MS} ms. "
                                   f"Encoder change: L {enc.left - at_halt.left:+d}, "
                                   f"R {enc.right - at_halt.right:+d} counts since the halt request.")

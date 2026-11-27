@@ -46,7 +46,8 @@ checks the cutoff every 20 ms and halts if the gap between checks exceeds 80 ms.
 While driving with gyro heading, the newest reading must also be within 80 ms.
 If a turn misses its target, the error shows the cutoff threshold, the last two
 headings at the cutoff, and the wheel counts added while settling. The Pi repeats
-the halt command while checking that the readings settle.
+the halt command for up to 1.5 seconds and requires 150 ms of steady readings
+before starting the next motion.
 
 Run `6 --turn-test 90` in a clear area to test the left turn by itself and compare
 the gyro and wheel estimates with the physical angle. Add `--heading wheels` to
