@@ -20,24 +20,24 @@ from modules.script_tools import run
 # Turn angles are changes in heading. Positive is left and negative is right.
 # Distances are rehearsal values. Set them from the actual course before driving.
 BEFORE_PAUSE = (
-    ("drive", 0.50, "Approach the first obstacle"),
+    ("drive", 0.15, "Approach the first obstacle"),
     ("turn", -45.0, "Turn right to start the detour"),
-    ("drive", 0.60, "Follow the diagonal"),
+    ("drive", 0.10, "Follow the diagonal"),
     ("turn", 45.0, "Return to the original heading"),
-    ("drive", 0.25, "Approach the corner past the obstacle"),
+    ("drive", 0.00, "Approach the corner past the obstacle"),
     ("turn", 90.0, "Turn left past the obstacle"),
-    ("drive", 0.35, "Cross to the left edge of the course"),
+    ("drive", 0.00, "Cross to the left edge of the course"),
     ("turn", -90.0, "Turn right toward the top straight"),
-    ("drive", 0.25, "Reach the top corner"),
+    ("drive", 0.00, "Reach the top corner"),
     ("turn", -90.0, "Turn right onto the top straight"),
-    ("drive", 0.55, "Reach the timed stop"),
+    ("drive", 0.10, "Reach the timed stop"),
 )
 AFTER_PAUSE = (
-    ("drive", 0.55, "Continue along the top straight"),
+    ("drive", 0.10, "Continue along the top straight"),
     ("turn", -90.0, "Turn right onto the final straight"),
-    ("drive", 0.55, "Reach the inspection stop"),
+    ("drive", 0.10, "Reach the inspection stop"),
 )
-FINISH = (("drive", 0.80, "Continue to the finish line"),)
+FINISH = (("drive", 0.10, "Continue to the finish line"),)
 PAUSE_S = 5.0                         # 5 to 10 seconds on the top straight
 DRIVE_POWER = None                    # None uses drive.power in config/robot.yaml
 TURN_STEER = 1.0                      # fraction of full steering lock

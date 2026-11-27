@@ -9,8 +9,8 @@ chassis:
   wheelbase_m: 0.185          # rear axle to front axle: 280 mm outer length - 95 mm wheel (front wheels assumed 95 mm)
   rear_track_m: 0.165         # rear tyre centre to tyre centre: 200 mm outer width - 35 mm tyre
   odometry_track_m: null      # effective track for the heading; set by scripts/00_calibrate_encoders.py --track
-  counts_per_wheel_rev: null  # set by scripts/00_calibrate_encoders.py
-  counts_per_metre: null      # set by scripts/00_calibrate_encoders.py; scripts 01-04 need it
+  counts_per_wheel_rev: 826.6 # set by scripts/00_calibrate_encoders.py
+  counts_per_metre: 2769.6    # set by scripts/00_calibrate_encoders.py; scripts 01-04 need it
 
 steering:                     # @S1 commands; the firmware limits them to 63..126
   center: 90                  # MEASURE: the command that drives straight
