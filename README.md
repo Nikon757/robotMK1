@@ -41,10 +41,12 @@ turn. `TURN_FINISH_POWER_FRACTION` sets the minimum power during that slowdown.
 `TURN_STOP_LEAD_DEG` allows a few degrees for coasting. A 90° left turn with the gyro
 uses `TURN_GYRO_LEFT_90_STOP_LEAD_DEG` based on the measured 9.9° of rollout. The
 steering and motor power taper earlier by the same change in lead. In wheel-heading
-mode, a 90° right turn uses `TURN_RIGHT_90_STOP_LEAD_DEG`. If the settled turn misses its
-target, the error shows the heading when the Pi requested a halt, the settled
-heading, and the count change for each wheel. The Pi repeats the halt command
-while checking that the readings settle.
+mode, a 90° right turn uses `TURN_RIGHT_90_STOP_LEAD_DEG`. For gyro turns the Pi
+checks the cutoff every 20 ms and halts if the gap between checks exceeds 80 ms.
+While driving with gyro heading, the newest reading must also be within 80 ms.
+If a turn misses its target, the error shows the cutoff threshold, the last two
+headings at the cutoff, and the wheel counts added while settling. The Pi repeats
+the halt command while checking that the readings settle.
 
 Run `6 --turn-test 90` in a clear area to test the left turn by itself and compare
 the gyro and wheel estimates with the physical angle. Add `--heading wheels` to

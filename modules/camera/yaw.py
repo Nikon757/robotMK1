@@ -7,6 +7,7 @@ import numpy as np
 
 
 MAX_SAMPLE_GAP_S = 0.15
+MAX_DRIVING_SAMPLE_AGE_S = 0.08
 IMU_STREAM = "demo_imu"
 
 
@@ -37,8 +38,8 @@ class OakYaw:
     def _vector(report) -> np.ndarray:
         return np.array((report.x, report.y, report.z), dtype=float)
 
-    def _require_fresh(self, report) -> None:
-        if report is None or abs((self._clock() - report.getTimestamp()).total_seconds()) > MAX_SAMPLE_GAP_S:
+    def _require_fresh(self, report, max_age_s: float = MAX_SAMPLE_GAP_S) -> None:
+        if report is None or abs((self._clock() - report.getTimestamp()).total_seconds()) > max_age_s:
             raise RuntimeError("OAK gyroscope readings went stale. Check the camera's USB connection.")
 
     def calibrate(self, duration_s: float) -> None:
@@ -92,7 +93,7 @@ class OakYaw:
             mean_rate = (self._vector(previous) + self._vector(report)) / 2 - self._bias
             angle += float(mean_rate @ self._up) * dt
             previous = report
-        self._require_fresh(previous)
+        self._require_fresh(previous, MAX_DRIVING_SAMPLE_AGE_S)
         if not np.isfinite(angle):
             raise RuntimeError("Invalid angular rate from the OAK gyroscope.")
         self._previous = previous

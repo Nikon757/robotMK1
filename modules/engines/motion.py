@@ -23,6 +23,8 @@ from .board import Encoders, NiumoBoard, open_board
 from .config import load_config
 
 LOOP_S = 0.05               # control loop; @M is re-sent every pass (board watchdog: 0.5 s)
+GYRO_TURN_LOOP_S = 0.02     # check the gyro cutoff more often while turning
+GYRO_TURN_MAX_GAP_S = 0.08  # stop if the Pi cannot keep up with gyro turn checks
 STEER_SETTLE_S = 0.3        # time for the steering servo to move by a full lock (0 -> 1)
 STOP_SETTLE_S = 0.4         # minimum time to observe the wheels after the halt command
 STOP_QUIET_MS = 150         # both encoder counts must stay still for this much board time
@@ -210,6 +212,8 @@ class Robot:
         check_from: Optional[float] = None
         checked = False
         cutoff_deg = 0.0
+        last_check: Optional[tuple[float, float]] = None
+        cutoff_detail = ""
 
         def steering(pose: Pose) -> float:
             """Full steer until TAPER_DEG before the target, then less and less: the wheels
@@ -227,8 +231,10 @@ class Robot:
             return finish_power_fraction + (1.0 - finish_power_fraction) * fraction
 
         def done(pose: Pose) -> bool:
-            nonlocal check_from, checked, cutoff_deg
+            nonlocal check_from, checked, cutoff_deg, last_check, cutoff_detail
             turned = (pose.heading - start.heading) * turn
+            signed_deg = math.degrees(turned) * turn
+            now = time.monotonic()
             travelled = abs(pose.distance - start.distance)
             # Judge the direction only once the wheels have rolled a little: standing tyres
             # resist the steering, so the wheels may finish their swing only while rolling.
@@ -245,13 +251,23 @@ class Robot:
                 checked = True
             distance_limit = max_distance_m is not None and travelled >= max_distance_m
             if distance_limit or turned >= cutoff:
-                cutoff_deg = math.degrees(pose.heading - start.heading)
+                cutoff_deg = signed_deg
+                if distance_limit:
+                    cutoff_detail = "Reached the arc distance limit. "
+                cutoff_detail += f"Heading threshold: {math.degrees(cutoff) * turn:+.1f}°. "
+                if last_check is not None:
+                    prev_deg, prev_time = last_check
+                    cutoff_detail += f"Previous check: {prev_deg:+.1f}° {(now - prev_time) * 1000:.0f} ms earlier. "
                 return True
+            last_check = (signed_deg, now)
             return False
 
+        gyro_turn = self.heading_delta is not None
         end, at_halt, at_rest = self._run(backwards * abs(power or self.power), done, steer_fn=steering,
                                          slow_down=slow_down if slowdown_rad > 0 else None,
                                          straighten_at_stop=slowdown_rad > 0,
+                                         control_period_s=GYRO_TURN_LOOP_S if gyro_turn else LOOP_S,
+                                         max_update_gap_s=GYRO_TURN_MAX_GAP_S if gyro_turn else None,
                                          timeout=timeout, what="Turning")
         settled_deg = math.degrees(end.heading - start.heading)
         if settled_tolerance_deg is not None and abs(settled_deg - angle_deg) > settled_tolerance_deg:
@@ -261,6 +277,7 @@ class Robot:
             source = "Gyro" if self.heading_delta is not None else "Encoder"
             raise MotionError(f"{source} heading settled at {settled_deg:+.1f}° with target {angle_deg:+g}°. "
                               f"Estimated angle when halt was sent: {cutoff_deg:+.1f}°. "
+                              f"{cutoff_detail}"
                               f"Encoder change after that sample: L {left:+d}, R {right:+d} "
                               f"counts in {elapsed_ms:d} ms of board time.")
         return end
@@ -325,20 +342,26 @@ class Robot:
              steer_fn: Optional[Callable[[Pose], float]] = None,
              slow_down: Optional[Callable[[Pose], float]] = None,
              straighten_at_stop: bool = False,
+             control_period_s: float = LOOP_S, max_update_gap_s: Optional[float] = None,
              timeout: float = 30.0, what: str = "The motion") -> tuple[Pose, Encoders, Encoders]:
         """Power the motors until done(pose) is true; always stops the motors at the end.
         Return the settled pose and the encoder samples at the halt request and at rest."""
         board = self.board
         started = last_move = time.monotonic()
+        last_update = started
         last_counts = None
         try:
             while True:
+                tick_start = time.monotonic()
                 enc = self._encoder_sample()
                 counts = (enc.left, enc.right)
                 pose = self._update(enc)
                 if done(pose):
                     break
                 now = time.monotonic()
+                if max_update_gap_s is not None and now - last_update > max_update_gap_s:
+                    raise MotionError(f"Gyro turn checks were delayed for {(now - last_update) * 1000:.0f} ms.")
+                last_update = now
                 if now - started > timeout:
                     raise MotionError(f"{what} didn't finish within {timeout:.0f} s.")
                 if counts != last_counts:
@@ -353,7 +376,7 @@ class Robot:
                 if slow_down is not None:
                     level *= slow_down(pose)
                 board.drive(*self._wheel_powers(level))
-                time.sleep(LOOP_S)
+                time.sleep(max(0.0, control_period_s - (time.monotonic() - tick_start)))
         finally:
             board.halt()
         if straighten_at_stop:
