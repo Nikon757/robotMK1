@@ -53,10 +53,20 @@ Run `6 --turn-test 90` in a clear area to test the left turn by itself and compa
 the gyro and wheel estimates with the physical angle. Add `--heading wheels` to
 run the same test using the board alone. Negative angles turn right.
 
-At the second stop, the camera pans right. The detector marks the largest connected
-patch of in-range stereo depth inside the inspection area and shows its median
-distance. Place the target inside the configured distance band and keep nearby
-background surfaces outside that band. If the detector times out, the run stops.
+At the second stop, the camera pans right. The detector selects a nearby surface
+inside `DEPTH_SEED_ROI` and traces its outline within `DEPTH_ROI`. It groups nearby
+depth fragments, rejects pixels at other measured depths, and uses colour to extend
+the outline where stereo depth is missing. The distance is the median of valid depth
+pixels on the selected surface. The box is smoothed over `DEPTH_CONFIRM_FRAMES`
+matching frames. If the detector times out, the run stops.
+[OpenCV foreground segmentation](https://docs.opencv.org/4.10.0/d3/d47/group__imgproc__segmentation.html)
+
+Use `6 --camera-only` to test this at the inspection position. Aim the target near
+the centre and test it against the actual background. `DEPTH_SURFACE_TOLERANCE_M`
+sets how close each valid depth pixel must be to the selected surface. Matte or
+low-texture surfaces can still produce sparse stereo readings.
+[Luxonis stereo depth documentation](https://docs.luxonis.com/hardware/platform/features/depth)
+
 Once a box appears, press Enter in the terminal to recenter the camera and drive
 the final measured leg. The bypass and finish use the configured route distances.
 RGB and depth are paired on the camera before the Pi draws the overlay.

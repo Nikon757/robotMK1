@@ -1,6 +1,7 @@
 """Add a depth-based obstacle box to the OAK-D Lite's colour stream."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -27,26 +28,110 @@ class ObstacleSettings:
     roi: tuple[float, float, float, float]
     min_pixels: int
     confirm_frames: int
+    seed_roi: tuple[float, float, float, float] = (0.39, 0.30, 0.61, 0.70)
+    depth_tolerance_m: float = 0.045
+    close_kernel_px: int = 13
 
 
-def find_obstacle(depth: np.ndarray, settings: ObstacleSettings) -> Obstacle | None:
-    """Find the largest connected patch of in-range pixels in the inspection area."""
-    height, width = depth.shape
-    left, top, right, bottom = settings.roi
-    x0, x1 = round(left * width), round(right * width)
-    y0, y1 = round(top * height), round(bottom * height)
+def _roi_bounds(roi: tuple[float, float, float, float], shape: tuple[int, int]) -> tuple[int, int, int, int]:
+    height, width = shape
+    left, top, right, bottom = roi
+    return round(left * width), round(top * height), round(right * width), round(bottom * height)
+
+
+def _refine_box(image: np.ndarray, observed: np.ndarray, other_depths: np.ndarray,
+                box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Use colour to fill missing depth near the block while protecting measured background."""
+    x, y, w, h = box
+    height, width = observed.shape
+    pad_x = max(w, 2 * h // 3)
+    x0, y0 = max(0, x - pad_x), max(0, y - h)
+    x1, y1 = min(width, x + w + pad_x), min(height, y + 2 * h)
+    region = np.s_[y0:y1, x0:x1]
+    seeds = observed[region]
+    background = other_depths[region]
+    if not background.any() or np.all(seeds | background):
+        return box
+
+    mask = np.full(seeds.shape, cv2.GC_PR_FGD, dtype=np.uint8)
+    mask[background] = cv2.GC_BGD
+    mask[seeds] = cv2.GC_FGD
+
+    # Fit the colour model on a small crop to keep the Pi's stream responsive.
+    scale = min(1.0, 160 / max(seeds.shape))
+    size = (max(1, round(seeds.shape[1] * scale)), max(1, round(seeds.shape[0] * scale)))
+    small = cv2.resize(mask, size, interpolation=cv2.INTER_NEAREST)
+    if np.count_nonzero(small == cv2.GC_BGD) < 5 or np.count_nonzero(small == cv2.GC_FGD) < 5:
+        return box
+    colour = cv2.resize(image[region], size, interpolation=cv2.INTER_AREA)
+    cv2.grabCut(colour, small, None, None, None, 1, cv2.GC_INIT_WITH_MASK)
+    foreground = ((small == cv2.GC_FGD) | (small == cv2.GC_PR_FGD)).astype(np.uint8)
+    refined = cv2.resize(foreground, (seeds.shape[1], seeds.shape[0]), interpolation=cv2.INTER_NEAREST)
+    refined[background] = 0
+    refined[seeds] = 1
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(refined)
+    overlap = np.bincount(labels[seeds], minlength=count)
+    overlap[0] = 0
+    index = int(np.argmax(overlap))
+    if not overlap[index]:
+        return box
+    rx, ry, rw, rh = map(int, stats[index, :4])
+    left, top = min(x, x0 + rx), min(y, y0 + ry)
+    right, bottom = max(x + w, x0 + rx + rw), max(y + h, y0 + ry + rh)
+    return left, top, right - left, bottom - top
+
+
+def find_obstacle(depth: np.ndarray, settings: ObstacleSettings, image: np.ndarray | None = None) -> Obstacle | None:
+    """Find a near surface in the seed region and trace its outline in the inspection area."""
+    x0, y0, x1, y1 = _roi_bounds(settings.roi, depth.shape)
+    sx0, sy0, sx1, sy1 = _roi_bounds(settings.seed_roi, depth.shape)
+    sx0, sy0 = max(sx0, x0), max(sy0, y0)
+    sx1, sy1 = min(sx1, x1), min(sy1, y1)
+    if sx0 >= sx1 or sy0 >= sy1:
+        return None
+    seed = np.s_[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0]
     crop = depth[y0:y1, x0:x1]
     valid = (crop > 0) & (crop >= settings.min_m * 1000) & (crop <= settings.max_m * 1000)
-    mask = cv2.morphologyEx(valid.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    seed_depths = np.sort(crop[seed][valid[seed]])
+    min_support = max(12, settings.min_pixels // 8)
+    tolerance_mm = settings.depth_tolerance_m * 1000
+    # Ignore small groups of outliers and choose the nearest band with enough depth support.
+    end = np.searchsorted(seed_depths, seed_depths + tolerance_mm, side="right")
+    supported = np.flatnonzero(end - np.arange(len(seed_depths)) >= min_support)
+    if not supported.size:
+        return None
+    first = supported[0]
+    reference = np.median(seed_depths[first:end[first]])
+    near = valid & (np.abs(crop - reference) <= tolerance_mm)
+    other_depths = (crop > 0) & ~near
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (settings.close_kernel_px,) * 2)
+    mask = cv2.morphologyEx(near.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    mask[other_depths] = 0
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-    if count <= 1:
+    overlap = np.bincount(labels[seed][near[seed]], minlength=count)
+    overlap[0] = 0
+    index = int(np.argmax(overlap))
+    if overlap[index] < min_support:
         return None
-    index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    x, y, box_w, box_h, area = map(int, stats[index])
-    if area < settings.min_pixels:
+    observed = (labels == index) & near
+    if np.count_nonzero(observed) < settings.min_pixels:
         return None
-    distance_m = float(np.median(crop[labels == index])) / 1000
+    box = tuple(map(int, stats[index, :4]))
+    if image is not None:
+        box = _refine_box(image[y0:y1, x0:x1], observed, other_depths, box)
+    x, y, box_w, box_h = box
+    distance_m = float(np.median(crop[observed])) / 1000
     return Obstacle(x + x0, y + y0, box_w, box_h, distance_m)
+
+
+def _same_obstacle(old: Obstacle, new: Obstacle, tolerance_m: float) -> bool:
+    if abs(old.distance_m - new.distance_m) > tolerance_m:
+        return False
+    width = min(old.x + old.width, new.x + new.width) - max(old.x, new.x)
+    height = min(old.y + old.height, new.y + new.height) - max(old.y, new.y)
+    shared = max(0, width) * max(0, height)
+    union = old.width * old.height + new.width * new.height - shared
+    return shared >= 0.30 * union
 
 
 class OakObstacleCamera(OakMjpegCamera):
@@ -61,20 +146,37 @@ class OakObstacleCamera(OakMjpegCamera):
         self.yaw: OakYaw | None = None
         self._inspecting = False
         self._detection: Obstacle | None = None
-        self._hits = 0
+        self._recent: deque[Obstacle] = deque(maxlen=settings.confirm_frames)
 
     def inspect(self, enabled: bool) -> None:
         with self._new_frame:
             self._inspecting = enabled
             self._detection = None
-            self._hits = 0
+            self._recent.clear()
 
     def wait_for_obstacle(self, timeout: float) -> Obstacle | None:
         with self._new_frame:
             ready = self._new_frame.wait_for(
-                lambda: self._hits >= self.settings.confirm_frames or self._stop.is_set(), timeout
+                lambda: self._detection is not None or self._stop.is_set(), timeout
             )
             return self._detection if ready and not self._stop.is_set() else None
+
+    def _record_detection(self, obstacle: Obstacle | None) -> Obstacle | None:
+        if obstacle is None:
+            self._recent.clear()
+        else:
+            if self._recent and not _same_obstacle(self._recent[-1], obstacle, self.settings.depth_tolerance_m):
+                self._recent.clear()
+            self._recent.append(obstacle)
+
+        if len(self._recent) < self.settings.confirm_frames:
+            self._detection = None
+        else:
+            edges = [(box.x, box.y, box.x + box.width, box.y + box.height) for box in self._recent]
+            x0, y0, x1, y1 = (round(value) for value in np.median(edges, axis=0))
+            distance = float(np.median([box.distance_m for box in self._recent]))
+            self._detection = Obstacle(x0, y0, x1 - x0, y1 - y0, distance)
+        return self._detection
 
     def _open_device(self, dai):
         device = dai.Device()
@@ -140,10 +242,8 @@ class OakObstacleCamera(OakMjpegCamera):
 
         with self._new_frame:
             if self._inspecting:
-                obstacle = find_obstacle(depth, self.settings)
-                self._detection = obstacle
-                self._hits = self._hits + 1 if obstacle else 0
-                if obstacle is not None and self._hits >= self.settings.confirm_frames:
+                obstacle = self._record_detection(find_obstacle(depth, self.settings, image))
+                if obstacle is not None:
                     x, y, w, h = obstacle.x, obstacle.y, obstacle.width, obstacle.height
                     cv2.rectangle(image, (x, y), (x + w - 1, y + h - 1), (0, 255, 0), 2)
                     self._label(image, f"Obstacle {obstacle.distance_m:.2f} m", x, max(20, y - 6))

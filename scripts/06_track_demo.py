@@ -55,8 +55,11 @@ IMU_CALIBRATION_S = 1.0
 # Pan positions and stream settings come from config/robot.yaml.
 DEPTH_MIN_M = 0.35
 DEPTH_MAX_M = 1.20
-DEPTH_ROI = (0.18, 0.18, 0.82, 0.78)  # left, top, right, bottom as fractions of the image
-DEPTH_MIN_PIXELS = 600               # connected pixels in a 640 × 360 frame
+DEPTH_ROI = (0.12, 0.02, 0.88, 1.00)  # outline search bounds, left/top/right/bottom fractions
+DEPTH_SEED_ROI = (0.39, 0.30, 0.61, 0.70)  # aim the obstacle at this central region
+DEPTH_SURFACE_TOLERANCE_M = 0.045     # accepted depth difference from the selected surface
+DEPTH_CLOSE_KERNEL_PX = 13           # stitch nearby depth fragments across small holes
+DEPTH_MIN_PIXELS = 600               # measured foreground pixels in a 640 × 360 frame
 DEPTH_CONFIRM_FRAMES = 3
 DETECTION_TIMEOUT_S = 12.0
 CAMERA_START_TIMEOUT_S = 12.0
@@ -220,8 +223,17 @@ def validate_settings() -> None:
             or round(right * 640) - round(left * 640) < 3
             or round(bottom * 360) - round(top * 360) < 3):
         raise RuntimeError("Set DEPTH_ROI to a valid area at least 3 pixels wide and high")
+    seed_left, seed_top, seed_right, seed_bottom = DEPTH_SEED_ROI
+    if (not left <= seed_left < seed_right <= right or not top <= seed_top < seed_bottom <= bottom
+            or round(seed_right * 640) - round(seed_left * 640) < 3
+            or round(seed_bottom * 360) - round(seed_top * 360) < 3):
+        raise RuntimeError("Set DEPTH_SEED_ROI to an area at least 3 pixels wide and high within DEPTH_ROI")
     if not 0 < DEPTH_MIN_M < DEPTH_MAX_M or DEPTH_MIN_PIXELS < 1 or DEPTH_CONFIRM_FRAMES < 1:
         raise RuntimeError("Check the depth range, minimum area and confirmation frame count")
+    if not 0 < DEPTH_SURFACE_TOLERANCE_M <= DEPTH_MAX_M - DEPTH_MIN_M:
+        raise RuntimeError("Check DEPTH_SURFACE_TOLERANCE_M against the inspection's depth range")
+    if DEPTH_CLOSE_KERNEL_PX < 1 or DEPTH_CLOSE_KERNEL_PX % 2 == 0:
+        raise RuntimeError("Set DEPTH_CLOSE_KERNEL_PX to a positive odd number")
     timing_and_limits = (TURN_SLOWDOWN_DEG, MAX_TURN_DISTANCE_M, TURN_TOLERANCE_DEG, MOTION_TIMEOUT_S,
                          DETECTION_TIMEOUT_S, CAMERA_START_TIMEOUT_S, IMU_CALIBRATION_S)
     if any(not math.isfinite(value) or value <= 0 for value in timing_and_limits):
@@ -259,7 +271,9 @@ def main(argv: list[str] | None = None) -> int:
         stream = cfg["camera_stream"]
         port = int(stream["port"]) if args.port is None else args.port
         settings = ObstacleSettings(DEPTH_MIN_M, DEPTH_MAX_M, DEPTH_ROI,
-                                    DEPTH_MIN_PIXELS, DEPTH_CONFIRM_FRAMES)
+                                    DEPTH_MIN_PIXELS, DEPTH_CONFIRM_FRAMES,
+                                    seed_roi=DEPTH_SEED_ROI, depth_tolerance_m=DEPTH_SURFACE_TOLERANCE_M,
+                                    close_kernel_px=DEPTH_CLOSE_KERNEL_PX)
         use_gyro = args.heading == "gyro" and not args.camera_only
         with OakObstacleCamera(int(stream["fps"]), int(stream["jpeg_quality"]), settings,
                                imu_rate_hz=IMU_RATE_HZ if use_gyro else None) as camera:
