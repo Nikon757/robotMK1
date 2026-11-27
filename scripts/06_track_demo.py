@@ -55,7 +55,7 @@ IMU_CALIBRATION_S = 1.0
 # Pan positions and stream settings come from config/robot.yaml.
 DEPTH_MIN_M = 0.35
 DEPTH_MAX_M = 1.20
-DEPTH_ROI = (0.12, 0.02, 0.88, 1.00)  # outline search bounds, left/top/right/bottom fractions
+DEPTH_ROI = (0.02, 0.01, 0.98, 1.00)  # outline search bounds, left/top/right/bottom fractions
 DEPTH_SEED_ROI = (0.39, 0.30, 0.61, 0.70)  # aim the obstacle at this central region
 DEPTH_SURFACE_TOLERANCE_M = 0.045     # accepted depth difference from the selected surface
 DEPTH_CLOSE_KERNEL_PX = 13           # stitch nearby depth fragments across small holes

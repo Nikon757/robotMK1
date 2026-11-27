@@ -55,10 +55,11 @@ run the same test using the board alone. Negative angles turn right.
 
 At the second stop, the camera pans right. The detector selects a nearby surface
 inside `DEPTH_SEED_ROI` and traces its outline within `DEPTH_ROI`. It groups nearby
-depth fragments, rejects pixels at other measured depths, and uses colour to extend
-the outline where stereo depth is missing. A sparse outline needs at least
-`DEPTH_MIN_SEED_PIXELS` real depth readings on that connected surface in the aim
-region. The distance is the median of valid depth pixels on the selected surface.
+depth fragments, rejects pixels at other measured depths, and uses the measured
+surface colour to limit how far its outline extends into gaps in stereo depth.
+Isolated depth readings can support a sparse outline when at least
+`DEPTH_MIN_SEED_PIXELS` of them fall on the same connected outline in the aim region.
+The distance is the median of valid depth pixels on the selected surface.
 The box is smoothed over `DEPTH_CONFIRM_FRAMES` matching frames. If the detector
 times out, the run stops and prints the last inspection status.
 [OpenCV foreground segmentation](https://docs.opencv.org/4.10.0/d3/d47/group__imgproc__segmentation.html)

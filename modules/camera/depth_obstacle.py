@@ -42,41 +42,42 @@ def _roi_bounds(roi: tuple[float, float, float, float], shape: tuple[int, int]) 
 
 def _refine_mask(image: np.ndarray, observed: np.ndarray, other_depths: np.ndarray) -> np.ndarray | None:
     """Use colour to fill missing depth next to the measured foreground."""
-    x, y, w, h = cv2.boundingRect(observed.astype(np.uint8))
-    height, width = observed.shape
-    pad_x = max(w, 2 * h // 3, width // 6)
-    pad_y = max(h, height // 3)
-    x0, y0 = max(0, x - pad_x), max(0, y - pad_y)
-    x1, y1 = min(width, x + w + pad_x), min(height, y + h + pad_y)
-    region = np.s_[y0:y1, x0:x1]
-    seeds = observed[region]
-    background = other_depths[region]
-    if not background.any() or np.all(seeds | background):
+    if np.all(observed | other_depths):
         return None
 
-    # Fit the colour model on a small crop to keep the Pi's stream responsive.
-    scale = min(1.0, 160 / max(seeds.shape))
-    size = (max(1, round(seeds.shape[1] * scale)), max(1, round(seeds.shape[0] * scale)))
-    small = np.full((size[1], size[0]), cv2.GC_PR_FGD, dtype=np.uint8)
-    small[cv2.resize(background.astype(np.float32), size, interpolation=cv2.INTER_AREA) >= 0.5] = cv2.GC_BGD
-    small[cv2.resize(seeds.astype(np.float32), size, interpolation=cv2.INTER_AREA) > 0] = cv2.GC_FGD
-    if np.count_nonzero(small == cv2.GC_BGD) < 5 or np.count_nonzero(small == cv2.GC_FGD) < 5:
+    # Fit on a small image to keep the Pi's stream responsive. Look beyond the stereo
+    # patch because the only measurements may come from a label on one side of the object.
+    height, width = observed.shape
+    scale = min(1.0, 160 / max(height, width))
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    seeds = cv2.resize(observed.astype(np.float32), size, interpolation=cv2.INTER_AREA) > 0
+    background = cv2.resize(other_depths.astype(np.float32), size, interpolation=cv2.INTER_AREA) >= 0.5
+    if np.count_nonzero(seeds) < 5:
         return None
-    colour = cv2.resize(image[region], size, interpolation=cv2.INTER_AREA)
+
+    colour = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    lab = cv2.cvtColor(colour, cv2.COLOR_BGR2LAB).astype(np.float32)
+    seed_colour = np.median(lab[seeds], axis=0)
+    distance = np.linalg.norm(lab - seed_colour, axis=2)
+    # Bound expansion into unmeasured pixels using the observed surface's colour spread.
+    limit = np.clip(np.percentile(distance[seeds], 85) + 14, 36, 50)
+    small = np.full((size[1], size[0]), cv2.GC_PR_FGD, dtype=np.uint8)
+    small[background | (distance > limit)] = cv2.GC_BGD
+    small[seeds] = cv2.GC_FGD
+    if np.count_nonzero(small == cv2.GC_BGD) < 5:
+        return None
     cv2.grabCut(colour, small, None, None, None, 1, cv2.GC_INIT_WITH_MASK)
     foreground = ((small == cv2.GC_FGD) | (small == cv2.GC_PR_FGD)).astype(np.uint8)
-    refined = cv2.resize(foreground, (seeds.shape[1], seeds.shape[0]), interpolation=cv2.INTER_NEAREST)
-    refined[background] = 0
-    refined[seeds] = 1
+    refined = cv2.resize(foreground, (width, height), interpolation=cv2.INTER_NEAREST)
+    refined[other_depths] = 0
+    refined[observed] = 1
     count, labels = cv2.connectedComponents(refined)
-    overlap = np.bincount(labels[seeds], minlength=count)
+    overlap = np.bincount(labels[observed], minlength=count)
     overlap[0] = 0
     index = int(np.argmax(overlap))
     if not overlap[index]:
         return None
-    foreground_mask = np.zeros_like(observed)
-    foreground_mask[region] = labels == index
-    return foreground_mask
+    return labels == index
 
 
 def find_obstacle(depth: np.ndarray, settings: ObstacleSettings, image: np.ndarray | None = None) -> Obstacle | None:
@@ -128,10 +129,9 @@ def _scan_obstacle(depth: np.ndarray, settings: ObstacleSettings,
     else:
         # On dark surfaces several small, separated patches may be the only valid stereo hits.
         # Require real depth on a single connected outline after colour segmentation.
-        nearby = cv2.boxFilter(near.astype(np.uint8), cv2.CV_16U, (3, 3), normalize=False)
-        observed[seed] |= near[seed] & (nearby[seed] >= 3)
-        if image is None or np.count_nonzero(observed[seed]) < min_support:
-            return None, "Depth is too fragmented to confirm an outline"
+        if image is None:
+            return None, "Fragmented depth needs RGB outline support"
+        observed[seed] |= near[seed]
         refined = _refine_mask(image[y0:y1, x0:x1], observed, other_depths)
         if refined is None or np.count_nonzero(refined) < settings.min_pixels:
             return None, "Sparse depth found, but no reliable outline"
