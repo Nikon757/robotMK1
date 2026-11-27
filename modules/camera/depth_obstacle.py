@@ -31,6 +31,7 @@ class ObstacleSettings:
     seed_roi: tuple[float, float, float, float] = (0.39, 0.30, 0.61, 0.70)
     depth_tolerance_m: float = 0.045
     close_kernel_px: int = 13
+    min_seed_pixels: int = 24
 
 
 def _roi_bounds(roi: tuple[float, float, float, float], shape: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -39,67 +40,73 @@ def _roi_bounds(roi: tuple[float, float, float, float], shape: tuple[int, int]) 
     return round(left * width), round(top * height), round(right * width), round(bottom * height)
 
 
-def _refine_box(image: np.ndarray, observed: np.ndarray, other_depths: np.ndarray,
-                box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
-    """Use colour to fill missing depth near the block while protecting measured background."""
-    x, y, w, h = box
+def _refine_mask(image: np.ndarray, observed: np.ndarray, other_depths: np.ndarray) -> np.ndarray | None:
+    """Use colour to fill missing depth next to the measured foreground."""
+    x, y, w, h = cv2.boundingRect(observed.astype(np.uint8))
     height, width = observed.shape
-    pad_x = max(w, 2 * h // 3)
-    x0, y0 = max(0, x - pad_x), max(0, y - h)
-    x1, y1 = min(width, x + w + pad_x), min(height, y + 2 * h)
+    pad_x = max(w, 2 * h // 3, width // 6)
+    pad_y = max(h, height // 3)
+    x0, y0 = max(0, x - pad_x), max(0, y - pad_y)
+    x1, y1 = min(width, x + w + pad_x), min(height, y + h + pad_y)
     region = np.s_[y0:y1, x0:x1]
     seeds = observed[region]
     background = other_depths[region]
     if not background.any() or np.all(seeds | background):
-        return box
-
-    mask = np.full(seeds.shape, cv2.GC_PR_FGD, dtype=np.uint8)
-    mask[background] = cv2.GC_BGD
-    mask[seeds] = cv2.GC_FGD
+        return None
 
     # Fit the colour model on a small crop to keep the Pi's stream responsive.
     scale = min(1.0, 160 / max(seeds.shape))
     size = (max(1, round(seeds.shape[1] * scale)), max(1, round(seeds.shape[0] * scale)))
-    small = cv2.resize(mask, size, interpolation=cv2.INTER_NEAREST)
+    small = np.full((size[1], size[0]), cv2.GC_PR_FGD, dtype=np.uint8)
+    small[cv2.resize(background.astype(np.float32), size, interpolation=cv2.INTER_AREA) >= 0.5] = cv2.GC_BGD
+    small[cv2.resize(seeds.astype(np.float32), size, interpolation=cv2.INTER_AREA) > 0] = cv2.GC_FGD
     if np.count_nonzero(small == cv2.GC_BGD) < 5 or np.count_nonzero(small == cv2.GC_FGD) < 5:
-        return box
+        return None
     colour = cv2.resize(image[region], size, interpolation=cv2.INTER_AREA)
     cv2.grabCut(colour, small, None, None, None, 1, cv2.GC_INIT_WITH_MASK)
     foreground = ((small == cv2.GC_FGD) | (small == cv2.GC_PR_FGD)).astype(np.uint8)
     refined = cv2.resize(foreground, (seeds.shape[1], seeds.shape[0]), interpolation=cv2.INTER_NEAREST)
     refined[background] = 0
     refined[seeds] = 1
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(refined)
+    count, labels = cv2.connectedComponents(refined)
     overlap = np.bincount(labels[seeds], minlength=count)
     overlap[0] = 0
     index = int(np.argmax(overlap))
     if not overlap[index]:
-        return box
-    rx, ry, rw, rh = map(int, stats[index, :4])
-    left, top = min(x, x0 + rx), min(y, y0 + ry)
-    right, bottom = max(x + w, x0 + rx + rw), max(y + h, y0 + ry + rh)
-    return left, top, right - left, bottom - top
+        return None
+    foreground_mask = np.zeros_like(observed)
+    foreground_mask[region] = labels == index
+    return foreground_mask
 
 
 def find_obstacle(depth: np.ndarray, settings: ObstacleSettings, image: np.ndarray | None = None) -> Obstacle | None:
     """Find a near surface in the seed region and trace its outline in the inspection area."""
+    return _scan_obstacle(depth, settings, image)[0]
+
+
+def _scan_obstacle(depth: np.ndarray, settings: ObstacleSettings,
+                   image: np.ndarray | None) -> tuple[Obstacle | None, str]:
     x0, y0, x1, y1 = _roi_bounds(settings.roi, depth.shape)
     sx0, sy0, sx1, sy1 = _roi_bounds(settings.seed_roi, depth.shape)
     sx0, sy0 = max(sx0, x0), max(sy0, y0)
     sx1, sy1 = min(sx1, x1), min(sy1, y1)
     if sx0 >= sx1 or sy0 >= sy1:
-        return None
+        return None, "Aim region is outside the search area"
     seed = np.s_[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0]
     crop = depth[y0:y1, x0:x1]
     valid = (crop > 0) & (crop >= settings.min_m * 1000) & (crop <= settings.max_m * 1000)
+    if not np.any(crop[seed]):
+        return None, "No stereo depth in the aim region"
     seed_depths = np.sort(crop[seed][valid[seed]])
-    min_support = max(12, settings.min_pixels // 8)
+    if not seed_depths.size:
+        return None, f"Centre depth is outside {settings.min_m:g}-{settings.max_m:g} m"
+    min_support = settings.min_seed_pixels
     tolerance_mm = settings.depth_tolerance_m * 1000
     # Ignore small groups of outliers and choose the nearest band with enough depth support.
     end = np.searchsorted(seed_depths, seed_depths + tolerance_mm, side="right")
     supported = np.flatnonzero(end - np.arange(len(seed_depths)) >= min_support)
     if not supported.size:
-        return None
+        return None, f"Too few similar depth readings in the aim region (need {min_support})"
     first = supported[0]
     reference = np.median(seed_depths[first:end[first]])
     near = valid & (np.abs(crop - reference) <= tolerance_mm)
@@ -107,21 +114,35 @@ def find_obstacle(depth: np.ndarray, settings: ObstacleSettings, image: np.ndarr
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (settings.close_kernel_px,) * 2)
     mask = cv2.morphologyEx(near.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
     mask[other_depths] = 0
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    count, labels = cv2.connectedComponents(mask)
     overlap = np.bincount(labels[seed][near[seed]], minlength=count)
     overlap[0] = 0
     index = int(np.argmax(overlap))
-    if overlap[index] < min_support:
-        return None
-    observed = (labels == index) & near
-    if np.count_nonzero(observed) < settings.min_pixels:
-        return None
-    box = tuple(map(int, stats[index, :4]))
-    if image is not None:
-        box = _refine_box(image[y0:y1, x0:x1], observed, other_depths, box)
-    x, y, box_w, box_h = box
+    foreground = labels == index if index else np.zeros_like(near)
+    observed = foreground & near
+    if np.count_nonzero(observed) >= settings.min_pixels and overlap[index] >= min_support:
+        if image is not None:
+            refined = _refine_mask(image[y0:y1, x0:x1], observed, other_depths)
+            if refined is not None:
+                foreground |= refined
+    else:
+        # On dark surfaces several small, separated patches may be the only valid stereo hits.
+        # Require real depth on a single connected outline after colour segmentation.
+        nearby = cv2.boxFilter(near.astype(np.uint8), cv2.CV_16U, (3, 3), normalize=False)
+        observed[seed] |= near[seed] & (nearby[seed] >= 3)
+        if image is None or np.count_nonzero(observed[seed]) < min_support:
+            return None, "Depth is too fragmented to confirm an outline"
+        refined = _refine_mask(image[y0:y1, x0:x1], observed, other_depths)
+        if refined is None or np.count_nonzero(refined) < settings.min_pixels:
+            return None, "Sparse depth found, but no reliable outline"
+        foreground = refined
+        observed &= foreground
+        if np.count_nonzero(observed[seed]) < min_support:
+            return None, "Too few depth readings on a single outline"
+
+    x, y, box_w, box_h = cv2.boundingRect(foreground.astype(np.uint8))
     distance_m = float(np.median(crop[observed])) / 1000
-    return Obstacle(x + x0, y + y0, box_w, box_h, distance_m)
+    return Obstacle(x + x0, y + y0, box_w, box_h, distance_m), "Surface found"
 
 
 def _same_obstacle(old: Obstacle, new: Obstacle, tolerance_m: float) -> bool:
@@ -145,12 +166,21 @@ class OakObstacleCamera(OakMjpegCamera):
         self.imu_rate_hz = imu_rate_hz
         self.yaw: OakYaw | None = None
         self._inspecting = False
+        self._show_aim = False
+        self._inspection_status = "Waiting for stereo depth"
         self._detection: Obstacle | None = None
         self._recent: deque[Obstacle] = deque(maxlen=settings.confirm_frames)
 
-    def inspect(self, enabled: bool) -> None:
+    @property
+    def inspection_status(self) -> str:
+        with self._new_frame:
+            return self._inspection_status
+
+    def inspect(self, enabled: bool, *, show_aim: bool = False) -> None:
         with self._new_frame:
             self._inspecting = enabled
+            self._show_aim = show_aim
+            self._inspection_status = "Waiting for stereo depth"
             self._detection = None
             self._recent.clear()
 
@@ -242,13 +272,20 @@ class OakObstacleCamera(OakMjpegCamera):
 
         with self._new_frame:
             if self._inspecting:
-                obstacle = self._record_detection(find_obstacle(depth, self.settings, image))
+                candidate, status = _scan_obstacle(depth, self.settings, image)
+                obstacle = self._record_detection(candidate)
+                self._inspection_status = status
                 if obstacle is not None:
                     x, y, w, h = obstacle.x, obstacle.y, obstacle.width, obstacle.height
                     cv2.rectangle(image, (x, y), (x + w - 1, y + h - 1), (0, 255, 0), 2)
                     self._label(image, f"Obstacle {obstacle.distance_m:.2f} m", x, max(20, y - 6))
                 else:
-                    self._label(image, "Looking for obstacle", 10, 24)
+                    if candidate is not None:
+                        self._inspection_status = f"Confirming obstacle ({len(self._recent)}/{self.settings.confirm_frames})"
+                    if self._show_aim:
+                        x0, y0, x1, y1 = _roi_bounds(self.settings.seed_roi, depth.shape)
+                        cv2.rectangle(image, (x0, y0), (x1 - 1, y1 - 1), (0, 215, 255), 1)
+                    self._label(image, self._inspection_status, 10, 24)
 
         ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
         if not ok:

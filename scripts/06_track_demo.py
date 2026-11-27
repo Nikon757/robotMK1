@@ -59,7 +59,8 @@ DEPTH_ROI = (0.12, 0.02, 0.88, 1.00)  # outline search bounds, left/top/right/bo
 DEPTH_SEED_ROI = (0.39, 0.30, 0.61, 0.70)  # aim the obstacle at this central region
 DEPTH_SURFACE_TOLERANCE_M = 0.045     # accepted depth difference from the selected surface
 DEPTH_CLOSE_KERNEL_PX = 13           # stitch nearby depth fragments across small holes
-DEPTH_MIN_PIXELS = 600               # measured foreground pixels in a 640 × 360 frame
+DEPTH_MIN_PIXELS = 600               # minimum area of the accepted foreground outline
+DEPTH_MIN_SEED_PIXELS = 24           # real stereo hits required in the aim region
 DEPTH_CONFIRM_FRAMES = 3
 DETECTION_TIMEOUT_S = 12.0
 CAMERA_START_TIMEOUT_S = 12.0
@@ -149,8 +150,8 @@ def inspect_obstacle(camera, finish_prompt: str) -> None:
     obstacle = camera.wait_for_obstacle(DETECTION_TIMEOUT_S)
     if obstacle is None:
         require_live_video(camera)
-        raise RuntimeError(f"No obstacle found in {DETECTION_TIMEOUT_S:g} s. "
-                           "Check the target's placement and the DEPTH settings.")
+        raise RuntimeError(f"No obstacle confirmed in {DETECTION_TIMEOUT_S:g} s. "
+                           f"{camera.inspection_status}. Check the target's placement and the DEPTH settings.")
     print(f"Obstacle detected at {obstacle.distance_m:.2f} m. See the box in the stream.")
     wait_for_enter(finish_prompt)
     require_live_video(camera)
@@ -230,6 +231,8 @@ def validate_settings() -> None:
         raise RuntimeError("Set DEPTH_SEED_ROI to an area at least 3 pixels wide and high within DEPTH_ROI")
     if not 0 < DEPTH_MIN_M < DEPTH_MAX_M or DEPTH_MIN_PIXELS < 1 or DEPTH_CONFIRM_FRAMES < 1:
         raise RuntimeError("Check the depth range, minimum area and confirmation frame count")
+    if DEPTH_MIN_SEED_PIXELS < 1:
+        raise RuntimeError("Set a positive DEPTH_MIN_SEED_PIXELS")
     if not 0 < DEPTH_SURFACE_TOLERANCE_M <= DEPTH_MAX_M - DEPTH_MIN_M:
         raise RuntimeError("Check DEPTH_SURFACE_TOLERANCE_M against the inspection's depth range")
     if DEPTH_CLOSE_KERNEL_PX < 1 or DEPTH_CLOSE_KERNEL_PX % 2 == 0:
@@ -273,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = ObstacleSettings(DEPTH_MIN_M, DEPTH_MAX_M, DEPTH_ROI,
                                     DEPTH_MIN_PIXELS, DEPTH_CONFIRM_FRAMES,
                                     seed_roi=DEPTH_SEED_ROI, depth_tolerance_m=DEPTH_SURFACE_TOLERANCE_M,
-                                    close_kernel_px=DEPTH_CLOSE_KERNEL_PX)
+                                    close_kernel_px=DEPTH_CLOSE_KERNEL_PX, min_seed_pixels=DEPTH_MIN_SEED_PIXELS)
         use_gyro = args.heading == "gyro" and not args.camera_only
         with OakObstacleCamera(int(stream["fps"]), int(stream["jpeg_quality"]), settings,
                                imu_rate_hz=IMU_RATE_HZ if use_gyro else None) as camera:
@@ -290,8 +293,8 @@ def main(argv: list[str] | None = None) -> int:
                 for url in server.urls():
                     print(" ", url)
                 if args.camera_only:
-                    wait_for_enter("Aim the camera at the target, then press Enter to start detection. ")
-                    inspect_obstacle(camera, "Press Enter to end the camera test. ")
+                    camera.inspect(True, show_aim=True)
+                    wait_for_enter("Aim the camera at the target and watch the live stream. Press Enter to end the test. ")
                 else:
                     drive_demo(cfg, camera)
             finally:

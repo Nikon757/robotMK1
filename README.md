@@ -56,15 +56,19 @@ run the same test using the board alone. Negative angles turn right.
 At the second stop, the camera pans right. The detector selects a nearby surface
 inside `DEPTH_SEED_ROI` and traces its outline within `DEPTH_ROI`. It groups nearby
 depth fragments, rejects pixels at other measured depths, and uses colour to extend
-the outline where stereo depth is missing. The distance is the median of valid depth
-pixels on the selected surface. The box is smoothed over `DEPTH_CONFIRM_FRAMES`
-matching frames. If the detector times out, the run stops.
+the outline where stereo depth is missing. A sparse outline needs at least
+`DEPTH_MIN_SEED_PIXELS` real depth readings on that connected surface in the aim
+region. The distance is the median of valid depth pixels on the selected surface.
+The box is smoothed over `DEPTH_CONFIRM_FRAMES` matching frames. If the detector
+times out, the run stops and prints the last inspection status.
 [OpenCV foreground segmentation](https://docs.opencv.org/4.10.0/d3/d47/group__imgproc__segmentation.html)
 
-Use `6 --camera-only` to test this at the inspection position. Aim the target near
-the centre and test it against the actual background. `DEPTH_SURFACE_TOLERANCE_M`
-sets how close each valid depth pixel must be to the selected surface. Matte or
-low-texture surfaces can still produce sparse stereo readings.
+Use `6 --camera-only` to test this at the inspection position. Centre the target
+in the amber guide. The preview stays open until you press Enter and reports when
+depth is missing, out of range, or too fragmented. `DEPTH_SURFACE_TOLERANCE_M`
+sets how close each valid depth pixel must be to the selected surface. For a dark
+or low-texture target with missing depth, try lighting it from the camera side or
+adding a matte piece of paper with a contrasting pattern.
 [Luxonis stereo depth documentation](https://docs.luxonis.com/hardware/platform/features/depth)
 
 Once a box appears, press Enter in the terminal to recenter the camera and drive
